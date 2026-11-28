@@ -3,6 +3,7 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -293,10 +294,20 @@ func (c *Client) Ping(ctx context.Context) error {
 // Tool is one tool as the server listed it. InputSchema is the JSON Schema
 // exactly as received, so the same list marshals to the same bytes.
 type Tool struct {
-	Name        string          `json:"name"`
-	Title       string          `json:"title,omitempty"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"inputSchema"`
+	instructions    string
+	instructionHash [sha256.Size]byte
+	Name            string          `json:"name"`
+	Title           string          `json:"title,omitempty"`
+	Description     string          `json:"description,omitempty"`
+	InputSchema     json.RawMessage `json:"inputSchema"`
+}
+
+func setInstructions(tools []Tool, text string) {
+	hash := sha256.Sum256([]byte(text))
+	for i := range tools {
+		tools[i].instructions = text
+		tools[i].instructionHash = hash
+	}
 }
 
 // emptySchema stands in for a tool that named no input schema.
@@ -336,17 +347,20 @@ func (c *Client) ListTools(ctx context.Context) ([]Tool, []string, error) {
 			}
 			if len(tools) == maxTools {
 				notes = append(notes, fmt.Sprintf("the server lists more than %d tools; the rest were dropped", maxTools))
+				setInstructions(tools, c.Info.Instructions)
 				return tools, notes, nil
 			}
 			seen[t.Name] = true
 			tools = append(tools, t)
 		}
 		if res.NextCursor == nil || *res.NextCursor == "" || *res.NextCursor == cursor {
+			setInstructions(tools, c.Info.Instructions)
 			return tools, notes, nil
 		}
 		cursor = *res.NextCursor
 	}
 	notes = append(notes, fmt.Sprintf("the tool list ran past %d pages; the rest were dropped", maxPages))
+	setInstructions(tools, c.Info.Instructions)
 	return tools, notes, nil
 }
 

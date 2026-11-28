@@ -23,7 +23,7 @@ func decodeServers(t *testing.T, body []byte) []mcpServerJSON {
 
 func TestMCPRoutes(t *testing.T) {
 	f := newFixture(t)
-	m := mcp.NewManager(filepath.Join(f.cfg.Paths().Home, "mcp"), "", "test")
+	m := mcp.NewManager(filepath.Join(f.cfg.Paths().Home, "mcp"), "", "test", "test-token")
 	f.engine.SetMCP(m)
 	t.Cleanup(m.Close)
 
@@ -98,7 +98,7 @@ func TestMCPKnownEmptyProjectList(t *testing.T) {
 		}
 	}
 	f := newFixture(t)
-	m := mcp.NewManager(filepath.Join(f.cfg.Paths().Home, "mcp"), "", "test")
+	m := mcp.NewManager(filepath.Join(f.cfg.Paths().Home, "mcp"), "", "test", "test-token")
 	f.engine.SetMCP(m)
 	t.Cleanup(m.Close)
 	server := map[string]any{"name": "empty", "command": os.Args[0], "args": []string{"-test.run=^TestMCPKnownEmptyProjectList$"}, "cwd": "{project}", "env": map[string]string{"QUECTO_TEST_EMPTY_LIST": "1"}}

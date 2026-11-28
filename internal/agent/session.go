@@ -643,7 +643,6 @@ func (s *Session) systemMessage(a config.Agent, osName, date string, b brief) ll
 		Instructions: a.Instructions,
 		Tools:        names,
 		NotAllTools:  len(names) < tools.AllCount(),
-		MCPServers:   b.offer.MCPServers(),
 	})
 	return llm.Message{Role: "system", Content: content}
 }
@@ -677,13 +676,16 @@ func (s *Session) contextMessagesUntil(a config.Agent, osName, date string, b br
 		last, _ := e.Meta["last_user"].(string)
 		_, kept := e.Meta["tail"]
 		mode = entryMode(e)
-		msgs = append(msgs, llm.Message{Role: "user", Content: prompts.Compaction(prompts.CompactionVars{
-			Summary: e.Content, Todos: todos, Carry: carry, LastUser: last, Kept: kept})})
+		msgs = append(msgs, llm.Message{Role: "user", Content: joinMessages(catalogText(e), prompts.Compaction(prompts.CompactionVars{
+			Summary: e.Content, Todos: todos, Carry: carry, LastUser: last, Kept: kept}))})
 	}
 	for i := 0; i < end; i++ {
 		e := s.Entries[i]
 		if !e.InContext {
 			continue
+		}
+		if i < summary {
+			e.Catalog = nil
 		}
 		switch e.Kind {
 		case "user":
@@ -705,7 +707,7 @@ func (s *Session) contextMessagesUntil(a config.Agent, osName, date string, b br
 			}
 			msgs = append(msgs, llm.Message{Role: "assistant", Content: e.Content,
 				ReasoningContent: reasoning, ToolCalls: e.ToolCalls})
-			msgs = append(msgs, repairToolResults(s.Entries, i, e.ToolCalls, images)...)
+			msgs = append(msgs, repairToolResults(s.Entries[:end], i, e.ToolCalls, images, summary)...)
 		case "tool":
 			// Tool results are emitted beside their assistant, so a tool
 			// message that lost its assistant is dropped rather than sent.
@@ -769,6 +771,10 @@ func modeRules(m config.WorkMode, b brief) string {
 // shape that carries one.
 func userMessage(e store.Entry, images map[string]llm.Part, rules string, features llm.Features) llm.Message {
 	var b strings.Builder
+	if signal := catalogText(e); signal != "" {
+		b.WriteString(signal)
+		b.WriteByte('\n')
+	}
 	if rules != "" {
 		b.WriteString(rules)
 		b.WriteString("\n\n")
@@ -822,14 +828,18 @@ func withText(text string, parts []llm.Part) []llm.Part {
 
 // repairToolResults returns one tool message per call, synthesising the ones
 // a crash left unanswered so the history stays valid.
-func repairToolResults(entries []store.Entry, at int, calls []llm.ToolCall, images map[string]llm.Part) []llm.Message {
+func repairToolResults(entries []store.Entry, at int, calls []llm.ToolCall, images map[string]llm.Part, summary int) []llm.Message {
 	answered := map[string]store.Entry{}
 	for j := at + 1; j < len(entries); j++ {
 		if entries[j].Kind == "assistant" {
 			break
 		}
 		if entries[j].Kind == "tool" && entries[j].InContext {
-			answered[entries[j].ToolCallID] = entries[j]
+			entry := entries[j]
+			if j < summary {
+				entry.Catalog = nil
+			}
+			answered[entry.ToolCallID] = entry
 		}
 	}
 	out := make([]llm.Message, 0, len(calls))
@@ -864,6 +874,12 @@ func toolMessage(id string, e store.Entry, images map[string]llm.Part) llm.Messa
 	}
 	if len(parts) > 0 {
 		m.Parts = withText(e.Content, parts)
+	}
+	if signal := catalogText(e); signal != "" {
+		m.Content = joinMessages(m.Content, signal)
+		if len(m.Parts) > 0 {
+			m.Parts = append(m.Parts, llm.TextPart(signal))
+		}
 	}
 	return m
 }

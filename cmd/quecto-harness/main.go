@@ -170,7 +170,7 @@ func serve(argv []string) error {
 	})
 	engine := agent.NewEngine(ctx, cfg, sessions, blobs, agent.Clients{Pool: pool}, searches, broker, hub)
 	// No server starts here: each starts the first time a turn offers it.
-	servers := mcp.NewManager(filepath.Join(p.Home, "mcp"), p.Log, version)
+	servers := mcp.NewManager(filepath.Join(p.Home, "mcp"), p.Log, version, token)
 	servers.Configure(cfg.MCP())
 	engine.SetMCP(servers)
 	srv := server.New(cfg, sessions, blobs, pastes, engine, broker, pool, searches, hub, token, listen, version)

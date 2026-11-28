@@ -33,8 +33,8 @@ const (
 
 // Limits on starting a server and on what it may put in front of the model.
 const (
-	startTimeout   = 60 * time.Second
 	maxDescription = 2000
+	startTimeout   = 60 * time.Second
 	logCap         = 1 << 20
 )
 
@@ -45,21 +45,25 @@ var backoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 *
 // Offered is one tool as a turn offers it: the name it is sent under, where
 // it comes from, and the schema as the server listed it.
 type Offered struct {
-	Wire        string
-	Server      string
-	Tool        string
-	Description string
-	Schema      json.RawMessage
-	ReadOnly    bool
+	target       string
+	Version      string
+	Instructions string
+	Wire         string
+	Server       string
+	Tool         string
+	Description  string
+	Schema       json.RawMessage
+	ReadOnly     bool
 }
 
 // Manager owns every running server. A server starts the first time a turn
 // needs it, once per project when its command line names the project, and
 // runs until the harness stops or its record changes.
 type Manager struct {
-	cacheDir string
-	logDir   string
-	version  string
+	fallbackKey []byte
+	cacheDir    string
+	logDir      string
+	version     string
 
 	readFile         func(string) ([]byte, error)
 	linkKey          func(string, string) error
@@ -106,9 +110,12 @@ type instance struct {
 
 // NewManager keeps the tool cache in cacheDir and each server's stderr in
 // logDir. Initial configuration cleans obsolete entries in an existing cache.
-func NewManager(cacheDir, logDir, version string) *Manager {
+func NewManager(cacheDir, logDir, version, token string) *Manager {
+	fallback := hmac.New(sha256.New, []byte(token))
+	fallback.Write([]byte("MCP tool destination"))
 	return &Manager{
-		cacheDir: cacheDir, logDir: logDir, version: version, readFile: os.ReadFile, linkKey: os.Link,
+		fallbackKey: fallback.Sum(nil),
+		cacheDir:    cacheDir, logDir: logDir, version: version, readFile: os.ReadFile, linkKey: os.Link,
 		readKey: func(f *os.File) ([]byte, error) { return io.ReadAll(io.LimitReader(f, 33)) },
 		servers: map[string]Server{}, inst: map[instKey]*instance{},
 		tools: map[instKey][]Tool{}, dirty: map[instKey]bool{}, generation: map[instKey]uint64{}, probed: map[string]catalogView{},
@@ -254,6 +261,7 @@ func (m *Manager) Tools(ctx context.Context, project string) ([]Offered, []strin
 			}
 			continue
 		}
+		target := m.targetVersion(s, project)
 		sorted := append([]Tool(nil), tools...)
 		sort.Slice(sorted, func(a, b int) bool { return sorted[a].Name < sorted[b].Name })
 		for _, t := range sorted {
@@ -270,13 +278,25 @@ func (m *Manager) Tools(ctx context.Context, project string) ([]Offered, []strin
 				continue
 			}
 			taken[wire] = t.Name
-			out = append(out, Offered{
-				Wire: wire, Server: s.Name, Tool: t.Name,
-				Description: describe(t), Schema: t.InputSchema, ReadOnly: s.ReadOnly,
-			})
+			out = append(out, definition(s, wire, t, target))
 		}
 	}
 	return out, notes
+}
+
+// The keyed digest distinguishes destinations without exposing their credentials.
+func (m *Manager) targetVersion(s Server, project string) string {
+	key := m.cacheKey()
+	if key == nil {
+		key = m.fallbackKey
+	}
+	return digestFor(key, s, keyFor(s, project))
+}
+
+func definition(s Server, wire string, t Tool, target string) Offered {
+	data, _ := json.Marshal([]any{target, s.Name, s.ReadOnly, t, t.instructionHash})
+	return Offered{target: target, Wire: wire, Server: s.Name, Tool: t.Name, Description: describe(t), Schema: t.InputSchema,
+		Instructions: t.instructions, ReadOnly: s.ReadOnly, Version: fmt.Sprintf("%x", sha256.Sum256(data))}
 }
 
 // describe is the description the model reads, capped so one server cannot
@@ -605,6 +625,7 @@ func (m *Manager) readCache(s Server, k instKey) ([]Tool, bool) {
 		now := time.Now()
 		_ = os.Chtimes(m.catalogPath(k), now, now)
 	}
+	setInstructions(c.Tools, c.Instructions)
 	return c.Tools, true
 }
 
@@ -636,7 +657,11 @@ func (m *Manager) prepareCache(s Server, k instKey, tools []Tool) string {
 	if launch == "" {
 		return ""
 	}
-	data, err := json.Marshal(diskCatalog{Version: 1, Launch: launch, catalogView: catalogView{Project: k.project, Tools: tools}})
+	instructions := ""
+	if len(tools) > 0 {
+		instructions = tools[0].instructions
+	}
+	data, err := json.Marshal(diskCatalog{Version: 1, Launch: launch, Instructions: instructions, catalogView: catalogView{Project: k.project, Tools: tools}})
 	if err != nil {
 		return ""
 	}
@@ -673,12 +698,34 @@ var ErrNotRunning = errors.New("not running")
 // Call runs one tool on a server for a project. The deadline is the server's
 // timeout, else fallback.
 func (m *Manager) Call(ctx context.Context, project, server, tool string, args json.RawMessage, fallback time.Duration) (Rendered, error) {
+	return m.call(ctx, project, server, tool, args, fallback, nil, nil)
+}
+
+// ErrToolChanged tells the caller to discover the current definition.
+var ErrToolChanged = errors.New("Tool unavailable or changed. Search again with tool_search.")
+
+// CallOffered checks the discovered definition and permission at each dispatch.
+func (m *Manager) CallOffered(ctx context.Context, project string, offered Offered, args json.RawMessage, fallback time.Duration, allowed func() bool) (Rendered, error) {
+	return m.call(ctx, project, offered.Server, offered.Tool, args, fallback, &offered, allowed)
+}
+
+func (m *Manager) call(ctx context.Context, project, server, tool string, args json.RawMessage, fallback time.Duration, expected *Offered, allowed func() bool) (Rendered, error) {
 	s, ok := m.Server(server)
 	if !ok || !s.Usable() {
+		if expected != nil {
+			return Rendered{}, ErrToolChanged
+		}
 		return Rendered{}, fmt.Errorf("MCP server %s is not configured or is turned off", server)
+	}
+	// Resolve the approved destination before starting a replacement process.
+	if expected != nil && (!s.Offers(tool) || m.targetVersion(s, project) != expected.target) {
+		return Rendered{}, ErrToolChanged
 	}
 	in := m.instanceFor(s, project)
 	if in == nil {
+		if expected != nil {
+			return Rendered{}, ErrToolChanged
+		}
 		return Rendered{}, fmt.Errorf("MCP server %s is %w", server, ErrNotRunning)
 	}
 	client, err := in.ensure(ctx, m)
@@ -695,7 +742,18 @@ func (m *Manager) Call(ctx context.Context, project, server, tool string, args j
 		cctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	res, err := client.CallTool(cctx, tool, args)
+	dispatch := func(client *Client) (CallResult, error) {
+		if expected != nil {
+			if _, err := m.listFor(cctx, s, project); err != nil {
+				return CallResult{}, ErrToolChanged
+			}
+			if (allowed != nil && !allowed()) || !m.current(in, client, *expected, expected.target) {
+				return CallResult{}, ErrToolChanged
+			}
+		}
+		return client.CallTool(cctx, tool, args)
+	}
+	res, err := dispatch(client)
 	if errors.Is(err, errSessionExpired) {
 		// The server no longer knows the session, so the call never ran there.
 		if client, err = in.renew(cctx, m, client); err != nil {
@@ -704,10 +762,13 @@ func (m *Manager) Call(ctx context.Context, project, server, tool string, args j
 			}
 			return Rendered{}, fmt.Errorf("MCP server %s is %w: %s", server, ErrNotRunning, err)
 		}
-		res, err = client.CallTool(cctx, tool, args)
+		res, err = dispatch(client)
 		if errors.Is(err, errSessionExpired) {
 			in.forget(client)
 		}
+	}
+	if errors.Is(err, ErrToolChanged) {
+		return Rendered{}, err
 	}
 	if err != nil {
 		in.answered(client, err)
@@ -723,6 +784,42 @@ func (m *Manager) Call(ctx context.Context, project, server, tool string, args j
 	}
 	in.succeeded(client)
 	return Render(res), nil
+}
+
+// GrantCurrent binds an allow-always decision to the configuration being saved.
+func (m *Manager) GrantCurrent(project string, s Server, expected Offered) bool {
+	target := m.targetVersion(s, project)
+	k := keyFor(s, project)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cur := m.servers[s.Name]
+	return cur.Usable() && cur.Offers(expected.Tool) && cur.ReadOnly == s.ReadOnly && reflect.DeepEqual(launchFields(cur), launchFields(s)) && m.matchesLocked(k, s, expected, target)
+}
+
+func (m *Manager) current(in *instance, client *Client, expected Offered, target string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.instanceErrorLocked(in) == nil && client.Info.Instructions == expected.Instructions &&
+		m.matchesLocked(in.key, m.servers[expected.Server], expected, target)
+}
+
+func (m *Manager) matchesLocked(k instKey, s Server, expected Offered, target string) bool {
+	if m.closed || m.dirty[k] || !s.Usable() || !s.Offers(expected.Tool) {
+		return false
+	}
+	found := false
+	for _, t := range m.tools[k] {
+		if t.Name == expected.Tool {
+			found = definition(s, expected.Wire, t, target).Version == expected.Version
+			continue
+		}
+		if t.Name < expected.Tool && s.Offers(t.Name) {
+			if wire, ok := WireName(s.Name, t.Name); ok && wire == expected.Wire {
+				return false
+			}
+		}
+	}
+	return found
 }
 
 // ensure returns a running client, starting one when there is none. A start

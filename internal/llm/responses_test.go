@@ -252,6 +252,17 @@ func TestResponsesToolsAndCapAreFlat(t *testing.T) {
 	}
 }
 
+func TestResponsesPreservesOpenArguments(t *testing.T) {
+	definition := FunctionSpec{Name: "lookup", Parameters: json.RawMessage(`{"type":"object","additionalProperties":true}`)}
+	specs := toResponsesTools([]Tool{{Function: definition, OpenArguments: true}, {Function: FunctionSpec{Name: "fixed"}}})
+	if strict, ok := specs[0]["strict"]; !ok || strict != false {
+		t.Fatalf("open arguments: %v", specs[0])
+	}
+	if _, ok := specs[1]["strict"]; ok {
+		t.Fatalf("default arguments: %v", specs[1])
+	}
+}
+
 // An image is the same bytes under different part names.
 func TestResponsesImagePartsAreRenamed(t *testing.T) {
 	got := body(t, ChatRequest{Model: "m", Messages: []Message{{Role: "user", Parts: []Part{

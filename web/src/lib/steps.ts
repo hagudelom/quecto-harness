@@ -55,14 +55,21 @@ export function todosOf(item: TranscriptItem): Todo[] {
     under, which is mcp__server__tool. Null for any other call. */
 export function mcpParts(item: TranscriptItem): { server: string; tool: string } | null {
   if (item.kind !== "tool") return null;
+  if (item.name === "tool_call") {
+    const name = stringArg(item, "name");
+    return mcpOf(name, item.meta) ?? { server: "MCP", tool: name || "Tool call" };
+  }
+  if (item.name === "tool_search") {
+    return mcpOf("", item.meta) ?? { server: "MCP", tool: "Search" };
+  }
   return mcpOf(item.name, item.meta);
 }
 
 export function mcpOf(name: string, meta?: Record<string, unknown> | null): { server: string; tool: string } | null {
-  if (!name.startsWith("mcp__")) return null;
   if (typeof meta?.server === "string" && typeof meta?.tool === "string") {
     return { server: meta.server, tool: meta.tool };
   }
+  if (!name.startsWith("mcp__")) return null;
   const rest = name.slice(5);
   const at = rest.indexOf("__");
   return at < 0 ? { server: rest, tool: "" } : { server: rest.slice(0, at), tool: rest.slice(at + 2) };

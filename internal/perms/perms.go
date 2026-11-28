@@ -40,7 +40,8 @@ var (
 
 // Request is one pending question about one tool call.
 type Request struct {
-	ID string `json:"id"`
+	GrantCurrent func(config.MCPServer) bool `json:"-"`
+	ID           string                      `json:"id"`
 	// SessionID is the session blocked on this and Route is the one drawing
 	// the card, which differ only when a subagent asked. Agent names who
 	// asked, for the label.
@@ -129,7 +130,7 @@ func (b *Broker) Evaluate(project, tool, command, path string, outside bool, mod
 			return ActionPrompt
 		}
 		return ActionAllow
-	case "processes", "todo_write", "write_plan", "ask_user_question", "exit_plan_mode", "subagent", "send_message":
+	case "tool_search", "processes", "todo_write", "write_plan", "ask_user_question", "exit_plan_mode", "subagent", "send_message":
 		// processes lists the session's own
 		// background commands and cannot start or stop one. todo_write
 		// changes the session's own plan and touches nothing on the machine,
@@ -231,9 +232,9 @@ func (b *Broker) Resolve(id string, d Decision) error {
 		return ErrNoSuchRequest
 	}
 	if d.Kind == DecideAlways && req.Server != "" {
-		if err := b.cfg.AllowMCP(req.Server, req.MCPTool); err != nil {
+		if err := b.cfg.AllowMCPIf(req.Server, req.MCPTool, req.GrantCurrent); err != nil {
 			d.Kind = DecideOnce
-			d.Note = "save mcp.json: " + err.Error() + ": the tool ran, but the rule was not kept"
+			d.Note = "Permission rule was not kept: " + err.Error()
 		}
 	} else if d.Kind == DecideAlways {
 		if err := b.cfg.AddAllow(req.Project, d.Prefix); err != nil {

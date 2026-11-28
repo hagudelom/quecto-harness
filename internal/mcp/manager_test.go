@@ -34,7 +34,7 @@ func httpServer(srv *httptest.Server) Server {
 func newTestManager(t *testing.T, servers ...Server) *Manager {
 	t.Helper()
 	dir := t.TempDir()
-	m := NewManager(filepath.Join(dir, "mcp"), dir, "test")
+	m := NewManager(filepath.Join(dir, "mcp"), dir, "test", "test-token")
 	m.Configure(servers)
 	t.Cleanup(m.Close)
 	return m
@@ -109,7 +109,7 @@ func TestManagerCrashKeepsSchemas(t *testing.T) {
 func TestManagerDiskCache(t *testing.T) {
 	dir := t.TempDir()
 	cache := filepath.Join(dir, "mcp")
-	m := NewManager(cache, dir, "test")
+	m := NewManager(cache, dir, "test", "test-token")
 	_, srv := newHTTPFake(t)
 	broken := httpServer(srv)
 	broken.Name = "fake"
@@ -119,12 +119,17 @@ func TestManagerDiskCache(t *testing.T) {
 	srv.Close()
 	other := broken
 	other.Name = "other"
-	m2 := NewManager(cache, dir, "test")
+	m2 := NewManager(cache, dir, "test", "test-token")
 	m2.Configure([]Server{broken, other})
 	defer m2.Close()
 	offered, notes := m2.Tools(context.Background(), "")
 	if len(offered) != 4 || len(notes) != 1 || !strings.Contains(notes[0], "other") {
 		t.Fatalf("tools = %s, notes %q", wires(offered), notes)
+	}
+	for _, tool := range offered {
+		if tool.Instructions != "Use the fake." {
+			t.Fatalf("cached instructions for %s: %q", tool.Wire, tool.Instructions)
+		}
 	}
 	if st := stateOf(m2, "fake"); st.State != StateFailed || len(st.Tools) != 4 {
 		t.Fatalf("status = %+v", st)
@@ -607,7 +612,7 @@ func TestToolsBelongToTheConfiguredLaunch(t *testing.T) {
 		t.Fatal(wires(got))
 	}
 	s := httpServer(second)
-	offline := NewManager(m.cacheDir, m.logDir, "test")
+	offline := NewManager(m.cacheDir, m.logDir, "test", "test-token")
 	offline.Configure([]Server{s})
 	defer offline.Close()
 	if got := stateOf(offline, s.Name).Tools; len(got) != 0 {
@@ -711,7 +716,7 @@ func TestProjectCatalogsSurviveSeparateLaunches(t *testing.T) {
 			t.Fatalf("Project %s offered %s", project, wires(offered))
 		}
 	}
-	other := NewManager(m.cacheDir, m.logDir, "test")
+	other := NewManager(m.cacheDir, m.logDir, "test", "test-token")
 	defer other.Close()
 	for _, project := range []string{"alpha", "beta"} {
 		k := keyFor(s, project)
@@ -853,7 +858,7 @@ func TestCatalogEvictionUsesLiteralNames(t *testing.T) {
 	if err := os.Mkdir(other, 0700); err != nil {
 		t.Fatal(err)
 	}
-	m := NewManager(dir, "", "test")
+	m := NewManager(dir, "", "test", "test-token")
 	defer m.Close()
 	m.Configure([]Server{s})
 	k := instKey{s.Name, "work"}
@@ -888,7 +893,7 @@ func TestProjectStatusSurvivesRestartAndProbe(t *testing.T) {
 	if _, _, _, err := m.Probe(context.Background(), s, "beta"); err != nil {
 		t.Fatal(err)
 	}
-	other := NewManager(m.cacheDir, m.logDir, "test")
+	other := NewManager(m.cacheDir, m.logDir, "test", "test-token")
 	defer other.Close()
 	other.Configure([]Server{s})
 	st := stateOf(other, s.Name)
@@ -899,7 +904,7 @@ func TestProjectStatusSurvivesRestartAndProbe(t *testing.T) {
 	if err := other.publishList(empty, []Tool{}, 0); err != nil {
 		t.Fatal(err)
 	}
-	last := NewManager(m.cacheDir, m.logDir, "test")
+	last := NewManager(m.cacheDir, m.logDir, "test", "test-token")
 	defer last.Close()
 	last.Configure([]Server{s, fakeServer("unknown")})
 	if known := stateOf(last, s.Name); !known.Listed || known.Project != "empty" || len(known.Tools) != 0 {
@@ -934,7 +939,7 @@ func TestCatalogMaintenancePreservesUnrelatedFiles(t *testing.T) {
 	write(".catalog-123456", "incomplete")
 	write(".catalog-notes", "keep")
 	write("local.notes.json", "keep")
-	m := NewManager(dir, "", "test")
+	m := NewManager(dir, "", "test", "test-token")
 	defer m.Close()
 	if m.cacheKey() == nil {
 		t.Fatal("Could not create a private catalog key")
@@ -992,7 +997,7 @@ func TestConcurrentCatalogCreatorsUseTheSameKey(t *testing.T) {
 	keys := make(chan []byte, 12)
 	for range cap(keys) {
 		go func() {
-			m := NewManager(dir, "", "test")
+			m := NewManager(dir, "", "test", "test-token")
 			defer m.Close()
 			<-start
 			keys <- m.cacheKey()
@@ -1034,7 +1039,7 @@ func TestStatusFindsOlderProjectCatalogs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	other := NewManager(m.cacheDir, m.logDir, "test")
+	other := NewManager(m.cacheDir, m.logDir, "test", "test-token")
 	defer other.Close()
 	other.Configure([]Server{s})
 	st := other.Status("obsolete", "alpha", "beta")[0]
@@ -1053,7 +1058,7 @@ func TestStartupDropsCatalogsOfRemovedServers(t *testing.T) {
 		}
 	}
 	m.Close()
-	other := NewManager(m.cacheDir, m.logDir, "test")
+	other := NewManager(m.cacheDir, m.logDir, "test", "test-token")
 	defer other.Close()
 	kept.Enabled = false
 	doc := filepath.Join(m.cacheDir, "notes.json")
@@ -1084,7 +1089,7 @@ func TestSharedStatusUsesTheLastSuccessfulListing(t *testing.T) {
 	if _, _, _, err := m.Probe(context.Background(), s, ""); err != nil {
 		t.Fatal(err)
 	}
-	fresh := NewManager(m.cacheDir, m.logDir, "test")
+	fresh := NewManager(m.cacheDir, m.logDir, "test", "test-token")
 	defer fresh.Close()
 	fresh.Configure([]Server{s})
 	for _, current := range []*Manager{m, fresh} {
@@ -1107,7 +1112,7 @@ func TestCatalogNamesAndLaunchesSurviveRestart(t *testing.T) {
 		t.Fatal("Catalog paths collide on a case-insensitive volume")
 	}
 	fresh := func(servers ...Server) *Manager {
-		n := NewManager(m.cacheDir, m.logDir, "test")
+		n := NewManager(m.cacheDir, m.logDir, "test", "test-token")
 		t.Cleanup(n.Close)
 		n.Configure(servers)
 		return n
@@ -1166,7 +1171,7 @@ func TestUnreadableRetiredCatalogNamesItsRecoveryPath(t *testing.T) {
 	old := log.Writer()
 	log.SetOutput(&messages)
 	t.Cleanup(func() { log.SetOutput(old) })
-	other := NewManager(m.cacheDir, m.logDir, "test")
+	other := NewManager(m.cacheDir, m.logDir, "test", "test-token")
 	defer other.Close()
 	other.Configure(nil)
 	if !strings.Contains(messages.String(), path) {
@@ -1192,7 +1197,7 @@ func TestSharedCatalogMigrationUsesTheLatestListing(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	other := NewManager(m.cacheDir, m.logDir, "test")
+	other := NewManager(m.cacheDir, m.logDir, "test", "test-token")
 	defer other.Close()
 	other.Configure([]Server{s, fakeServer("local")})
 	if got := stateOf(other, s.Name).Tools; len(got) != 1 || got[0] != "turn" {
@@ -1226,7 +1231,7 @@ func TestIncompleteToolListKeepsTheLastCatalog(t *testing.T) {
 		if got, _ := m.Tools(ctx, ""); wires(got) != "mcp__remote__echo" {
 			t.Errorf("Offer after %s = %s", result, wires(got))
 		}
-		other := NewManager(m.cacheDir, m.logDir, "test")
+		other := NewManager(m.cacheDir, m.logDir, "test", "test-token")
 		other.Configure([]Server{s})
 		st := stateOf(other, s.Name)
 		other.Close()
@@ -1240,5 +1245,45 @@ func TestIncompleteToolListKeepsTheLastCatalog(t *testing.T) {
 	}
 	if st := stateOf(m, s.Name); !st.Listed || len(st.Tools) != 0 {
 		t.Fatalf("Empty catalog = %+v", st)
+	}
+}
+
+func TestDiscoveredDefinitionAtGrantAndDispatch(t *testing.T) {
+	srv := fakeServer("fake")
+	m := newTestManager(t, srv)
+	offers, _ := m.Tools(t.Context(), "")
+	original := offers[0]
+	changed := original
+	changed.Version = "previous definition"
+	if !m.GrantCurrent("", srv, original) || m.GrantCurrent("", srv, changed) {
+		t.Fatal("grant accepted a different definition")
+	}
+	if _, err := m.CallOffered(t.Context(), "", changed, json.RawMessage(`{}`), time.Second, func() bool { return true }); !errors.Is(err, ErrToolChanged) {
+		t.Fatalf("dispatch with stale definition: %v", err)
+	}
+	if _, err := m.CallOffered(t.Context(), "", original, json.RawMessage(`{}`), time.Second, func() bool { return false }); !errors.Is(err, ErrToolChanged) {
+		t.Fatalf("dispatch with revoked permission: %v", err)
+	}
+}
+
+func TestToolVersionSurvivesUnavailableCacheKey(t *testing.T) {
+	// A file in place of the cache directory makes the key unavailable.
+	blocked := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocked, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	version := func(s Server) string {
+		m := NewManager(blocked, "", "test", "persisted test token")
+		defer m.Close()
+		return m.targetVersion(s, "")
+	}
+	srv := fakeServer("fake")
+	first := version(srv)
+	if first == "" || version(srv) != first {
+		t.Fatal("version changed after restart")
+	}
+	srv.Env["MCP_FAKE"] = "replacement"
+	if version(srv) == first {
+		t.Fatal("new destination kept the old version")
 	}
 }

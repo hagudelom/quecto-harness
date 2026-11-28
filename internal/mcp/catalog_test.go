@@ -71,7 +71,7 @@ func TestProjectLimitPreservesUnknownFilesAndTheLastStatusRead(t *testing.T) {
 	prev := log.Writer()
 	log.SetOutput(&logged)
 	defer log.SetOutput(prev)
-	fresh := NewManager(m.cacheDir, "", "test")
+	fresh := NewManager(m.cacheDir, "", "test", "test-token")
 	defer fresh.Close()
 	fresh.Configure([]Server{s})
 	if got := fresh.Status("0")[0]; !got.Listed || got.Project != "0" {
@@ -102,7 +102,7 @@ func TestLegacyCatalogFollowsItsLaunchAcrossCaseVariants(t *testing.T) {
 		}
 	}
 	m.Close()
-	fresh := NewManager(m.cacheDir, "", "test")
+	fresh := NewManager(m.cacheDir, "", "test", "test-token")
 	defer fresh.Close()
 	fresh.Configure([]Server{upper, lower})
 	if tools, ok := fresh.readCache(lower, keyFor(lower, "")); !ok || len(tools) != 1 || tools[0].Name != "lower" {
@@ -117,7 +117,7 @@ func TestOverlappingManagersPreserveEachOthersLaunch(t *testing.T) {
 	s := fakeServer("local")
 	if dir := os.Getenv("QUECTO_TEST_PEER_CATALOG"); dir != "" {
 		s.Command += "other"
-		n := NewManager(dir, "", "test")
+		n := NewManager(dir, "", "test", "test-token")
 		defer n.Close()
 		n.Configure([]Server{s})
 		if stateOf(n, "local").Listed {
@@ -158,7 +158,7 @@ func TestLegacyBindingCannotReplaceANewPublication(t *testing.T) {
 	if err := os.WriteFile(path, raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	n := NewManager(m.cacheDir, "", "test")
+	n := NewManager(m.cacheDir, "", "test", "test-token")
 	defer n.Close()
 	read := n.readFile
 	started, resume := make(chan struct{}), make(chan struct{})
@@ -209,7 +209,7 @@ func TestStartupWaitsForAMissingCatalogKey(t *testing.T) {
 	if err := os.Rename(key, key+".aside"); err != nil {
 		t.Fatal(err)
 	}
-	fresh := NewManager(m.cacheDir, "", "test")
+	fresh := NewManager(m.cacheDir, "", "test", "test-token")
 	defer fresh.Close()
 	fresh.Configure([]Server{s})
 	if _, err := os.Stat(key); !os.IsNotExist(err) {
@@ -233,7 +233,7 @@ func TestStartupMigratesOverAnObsoleteCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.Close()
-	fresh := NewManager(m.cacheDir, "", "test")
+	fresh := NewManager(m.cacheDir, "", "test", "test-token")
 	defer fresh.Close()
 	fresh.Configure([]Server{s})
 	if got, ok := fresh.readCache(s, keyFor(s, "")); !ok || len(got) != 1 || got[0].Name != "current" {
@@ -249,7 +249,7 @@ func TestCatalogWriteLockFailureNamesTheCacheOnce(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, ".catalog-write.lock"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	m := NewManager(dir, "", "test")
+	m := NewManager(dir, "", "test", "test-token")
 	defer m.Close()
 	var buf bytes.Buffer
 	old := log.Writer()

@@ -23,12 +23,23 @@ import (
 
 var ErrNotFound = errors.New("No session with that id")
 
+// CatalogView keeps the last presented version of each server's tools.
+type CatalogView map[string]map[string]string
+
+// CatalogUpdate records the signal sent with a message and the view it represents.
+type CatalogUpdate struct {
+	Signal json.RawMessage `json:"signal"`
+	View   CatalogView     `json:"view"`
+}
+
 // Entry is one row of a session. Kind drives rendering; InContext drives what
 // is sent to the model.
 type Entry struct {
-	Seq  int    `json:"seq"`
-	Kind string `json:"kind"`
-	Role string `json:"role"`
+	Catalog    *CatalogUpdate    `json:"catalog,omitempty"`
+	Discovered map[string]string `json:"discovered,omitempty"`
+	Seq        int               `json:"seq"`
+	Kind       string            `json:"kind"`
+	Role       string            `json:"role"`
 
 	Content   string `json:"content,omitempty"`
 	Reasoning string `json:"reasoning,omitempty"`

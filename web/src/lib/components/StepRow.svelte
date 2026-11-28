@@ -53,9 +53,17 @@
   // code, as it reads, and anything else as JSON. Its pictures are kept in
   // the file store, one id each.
   const mcp = $derived(mcpParts(item));
+  const args = $derived.by(() => {
+    if (item.kind !== "tool") return {};
+    const values = item.args.arguments;
+    if (item.name === "tool_call" && values && typeof values === "object" && !Array.isArray(values)) {
+      return values;
+    }
+    return item.args;
+  });
   const mcpArgs = $derived(
     mcp && item.kind === "tool"
-      ? Object.entries(item.args).map(([key, value]) => ({
+      ? Object.entries(args).map(([key, value]) => ({
           key,
           text: typeof value === "string" ? value : JSON.stringify(value, null, 2),
         }))

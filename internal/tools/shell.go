@@ -217,7 +217,7 @@ func (r *Runner) start(ctx context.Context, args RunShellArgs, onLine func(strin
 	}
 	p.cmd = cmd
 
-	p.spill = r.openSpill()
+	p.spill = r.openSpill("bash")
 	if p.spill != nil {
 		p.buf.spill, p.buf.spillCap = p.spill, spillCap
 	}
@@ -276,14 +276,14 @@ const spillCap = 16 << 20
 
 // openSpill starts the file a command's whole output is saved to, or nil when
 // nothing is saved. A folder that cannot be made saves nothing.
-func (r *Runner) openSpill() *os.File {
+func (r *Runner) openSpill(name string) *os.File {
 	if r.Spill == "" {
 		return nil
 	}
 	if err := os.MkdirAll(r.Spill, 0o700); err != nil {
 		return nil
 	}
-	f, err := os.CreateTemp(r.Spill, "bash-*.txt")
+	f, err := os.CreateTemp(r.Spill, name+"-*.txt")
 	if err != nil {
 		return nil
 	}
@@ -305,10 +305,14 @@ func keepSpill(f *os.File, buf *limitBuffer, truncated, keep bool) string {
 		os.Remove(f.Name())
 		return ""
 	}
-	if saved < buf.Total() {
-		return fmt.Sprintf("\nthe first %d bytes of the output are saved to %s: read it with offset and limit, or grep it\n", saved, f.Name())
+	return spillNote(f.Name(), saved, buf.Total())
+}
+
+func spillNote(path string, saved, total int) string {
+	if saved < total {
+		return fmt.Sprintf("\nthe first %d bytes of the output are saved to %s: read it with offset and limit, or grep it\n", saved, path)
 	}
-	return fmt.Sprintf("\nthe whole output, %d bytes, is saved to %s: read it with offset and limit, or grep it\n", saved, f.Name())
+	return fmt.Sprintf("\nthe whole output, %d bytes, is saved to %s: read it with offset and limit, or grep it\n", saved, path)
 }
 
 // ShellTimeout is how long the call in raw would be given. Arguments that do

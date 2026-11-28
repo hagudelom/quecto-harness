@@ -273,11 +273,19 @@ func (s *Store) MCPAllows(server, tool string) bool {
 // AllowMCP adds a tool to a server's allow list, which is what "allow always"
 // on an MCP card does.
 func (s *Store) AllowMCP(server, tool string) error {
+	return s.AllowMCPIf(server, tool, nil)
+}
+
+// AllowMCPIf saves permission only while the selected server still matches.
+func (s *Store) AllowMCPIf(server, tool string, current func(MCPServer) bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, srv := range s.mcp {
 		if srv.Name != server {
 			continue
+		}
+		if current != nil && !current(srv) {
+			return errors.New("tool changed while permission was pending")
 		}
 		if srv.Allows(tool) {
 			return nil

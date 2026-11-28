@@ -22,9 +22,10 @@ type catalogView struct {
 }
 
 type diskCatalog struct {
-	Version  int    `json:"version,omitempty"`
-	Launch   string `json:"launch"`
-	Template string `json:"template,omitempty"`
+	Instructions string `json:"instructions,omitempty"`
+	Version      int    `json:"version,omitempty"`
+	Launch       string `json:"launch"`
+	Template     string `json:"template,omitempty"`
 	catalogView
 }
 

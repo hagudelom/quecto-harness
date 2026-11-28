@@ -114,12 +114,16 @@ func buildResponsesBody(req ChatRequest) ([]byte, error) {
 func toResponsesTools(tools []Tool) []map[string]any {
 	out := make([]map[string]any, 0, len(tools))
 	for _, t := range tools {
-		out = append(out, map[string]any{
+		spec := map[string]any{
 			"type":        "function",
 			"name":        t.Function.Name,
 			"description": t.Function.Description,
 			"parameters":  t.Function.Parameters,
-		})
+		}
+		if t.OpenArguments {
+			spec["strict"] = false
+		}
+		out = append(out, spec)
 	}
 	return out
 }

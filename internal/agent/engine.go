@@ -1259,7 +1259,6 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	if e.mcp != nil {
 		runner.MCP = e.mcp
 	}
-	runner.MCPTools = mcpTable(b.offer)
 	// The provider and the offer both read the same config, so a tool that is
 	// sent and a tool that is built cannot disagree within the turn. A
 	// provider that fails to build leaves Search nil, and the tool answers
@@ -1320,6 +1319,9 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		}
 
 		e.setState(s, StateStreaming)
+		if s.recordCatalog(e.available(ctx, s, b.offer.Mode)) {
+			e.saveSoon(s)
+		}
 		msgs := e.messages(s, a, b)
 		s.mu.Lock()
 		req := llm.ChatRequest{
@@ -1443,9 +1445,10 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			call := res.ToolCalls[i]
 			// Calls that only read and need no card, made one after another,
 			// run at the same time.
-			if run := e.readRun(s, cfg, b.offer, runner, res.ToolCalls, i); run > 1 {
+			if batch := e.readRun(ctx, s, cfg, b.offer, runner, res.ToolCalls[i:]); len(batch) > 1 {
+				run := len(batch)
 				calls += run
-				e.runReads(ctx, s, cfg, a, runner, res.ToolCalls[i:i+run], i, &seen, b.offer, &clock)
+				e.runReads(ctx, s, a, runner, res.ToolCalls[i:i+run], batch, i, &seen, b.offer, &clock)
 				i += run - 1
 				if ctx.Err() != nil {
 					e.markStopped(s, clock, nil)
@@ -1457,18 +1460,25 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			// A tool the mode does not run or the toolset does not offer is
 			// answered here; a tool withheld from this session alone reaches
 			// its own tool, which says why it is not taken.
-			if b.offer.Knows(call.Function.Name) &&
-				(!b.offer.InMode(call.Function.Name) || !b.offer.InSet(call.Function.Name)) {
-				entry := e.unavailable(s, call, b.offer)
+			var rejected store.Entry
+			var concrete resolvedCall
+			if tools.Known(call.Function.Name) && (!b.offer.InMode(call.Function.Name) || !b.offer.InSet(call.Function.Name)) {
+				rejected = e.unavailable(s, call, b.offer)
+			} else {
+				var err error
+				concrete, err = e.resolveCall(ctx, s, b.offer.Mode, call)
+				if err != nil {
+					rejected = e.appendTool(s, call, nil, failedTool(err))
+				}
+			}
+			if rejected.Kind != "" {
 				e.saveSoon(s)
-				e.publish(s.ID, ev("tool_output", map[string]any{
-					"index": i, "id": call.ID, "name": call.Function.Name,
-					"output": entry.Content, "exit_code": nil, "truncated": false,
-				}))
+				e.publish(s.ID, ev("tool_output", map[string]any{"index": i, "id": call.ID, "name": call.Function.Name,
+					"output": rejected.Content, "exit_code": nil, "truncated": false, "meta": rejected.Meta}))
 				continue
 			}
 			note := seen.see(call)
-			decision, record, stopped := e.decide(ctx, s, cfg, a, runner, call)
+			decision, record, stopped := e.decide(ctx, s, cfg, a, runner, concrete)
 			if stopped {
 				e.stopWith(s, call, record, clock)
 				return
@@ -1476,15 +1486,14 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			e.setState(s, StateExecuting)
 			if decision.Kind != perms.DecideDeny {
 				e.publishStarted(s, runner, call, i)
-			}
-			if decision.Kind != perms.DecideDeny {
 				e.markStarted(s, call)
 				if call.Function.Name == "subagent" {
 					e.prelaunch(s, res.ToolCalls, i)
 				}
 			}
 			began := time.Now()
-			entry := e.execute(ctx, s, runner, call, decision, record, i)
+			result := e.runTool(ctx, s, runner, concrete, decision, b.offer.Mode, a.ID, record)
+			entry := e.appendTool(s, call, record, result)
 			if note != "" {
 				entry = e.addNote(s, entry, note)
 			}
@@ -1508,11 +1517,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		// next request carries execute's prompt and tools, and the budget
 		// starts again for the work the plan describes.
 		if e.takeApproval(s) {
-			// The MCP tools stay the ones the turn started with, and the new
-			// mode's rules apply to them; a change saved meanwhile waits for
-			// the next turn.
-			b = e.briefWith(ctx, s, cfg, true, b.offer.MCP)
-			runner.MCPTools = mcpTable(b.offer)
+			b = e.briefFor(ctx, s, cfg)
 			calls = 0
 			e.estimateBase(s, a, b)
 		}
@@ -1682,7 +1687,7 @@ func (e *Engine) noteLimit(s *Session, calls int) {
 
 // sideEffects are the tools whose call may have changed something outside the
 // session by the time a crash cut it off. Every MCP tool counts as one too.
-var sideEffects = map[string]bool{"bash": true, "write": true, "edit": true, "subagent": true, "send_message": true}
+var sideEffects = map[string]bool{"tool_call": true, "bash": true, "write": true, "edit": true, "subagent": true, "send_message": true}
 
 // markStarted records on the assistant entry that a call with side effects is
 // about to run, and saves it first. A harness that stops before the result
@@ -1851,28 +1856,39 @@ func (e *Engine) publishUsage(s *Session) {
 	e.publish(s.ID, ev("usage", payload))
 }
 
-// decide applies the policy and, when it says prompt, blocks on the browser.
-// The third result reports that the session was stopped while waiting.
-func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a config.Agent, runner *tools.Runner, call llm.ToolCall) (perms.Decision, *store.PermissionRecord, bool) {
-	tool := call.Function.Name
-	command, path := argSummary(call)
-	// An MCP call has no command or path of its own: what it is about is its
-	// arguments, which the card shows and the record keeps.
-	if _, ok := runner.MCPTools[tool]; ok {
-		command, path = string(call.Function.Arguments), ""
+// permissionRecord describes the concrete call even when discovery supplied its name.
+func permissionRecord(call resolvedCall) *store.PermissionRecord {
+	command, path := argSummary(call.ToolCall)
+	if call.offered != nil {
+		command, path = call.Function.Arguments, ""
 	}
-	record := &store.PermissionRecord{Tool: tool, Command: command, Path: path}
+	return &store.PermissionRecord{Tool: call.Function.Name, Command: command, Path: path}
+}
 
-	policy := cfg.Mode
-	if e.evaluate(s, runner, tool, command, path, policy) == perms.ActionAllow {
-		// A call skips the card two ways, and the record keeps them apart.
-		// "auto" is a policy that allowed this call, "full" is no policy.
-		record.Decision = "auto"
-		if policy == config.ModeFull {
-			record.Decision = "full"
-		}
+func (e *Engine) autoAllow(s *Session, runner *tools.Runner, mode config.Mode, t *mcp.Offered, r *store.PermissionRecord) bool {
+	var action perms.Action
+	if t != nil {
+		action = e.perms.EvaluateMCP(t.Server, t.Tool, mode)
+	} else {
+		action = e.perms.Evaluate(s.Project, r.Tool, r.Command, r.Path, runner.Outside(r.Path), mode)
+	}
+	if action != perms.ActionAllow {
+		return false
+	}
+	r.Decision = "auto"
+	if mode == config.ModeFull {
+		r.Decision = "full"
+	}
+	return true
+}
+
+// decide applies the policy and waits for an answer when a card is required.
+func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a config.Agent, runner *tools.Runner, call resolvedCall) (perms.Decision, *store.PermissionRecord, bool) {
+	record := permissionRecord(call)
+	if e.autoAllow(s, runner, cfg.Mode, call.offered, record) {
 		return perms.Decision{Kind: perms.DecideOnce}, record, false
 	}
+	tool, command, path := record.Tool, record.Command, record.Path
 	// The id is minted here rather than inside Ask, so the record kept with the
 	// tool entry carries the same id the card was asked with, whether the card
 	// was answered or the turn was stopped under it.
@@ -1889,8 +1905,11 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a co
 			req.Description = strings.TrimSpace(a.Description)
 		}
 	}
-	if t, ok := runner.MCPTools[tool]; ok {
+	if t := call.offered; t != nil {
 		req.Server, req.MCPTool, req.Prefix = t.Server, t.Tool, ""
+		project := s.Project
+		permitted := e.dispatchPermission(s, a.ID, project, *t, nil)
+		req.GrantCurrent = func(srv config.MCPServer) bool { return permitted() && e.mcp.GrantCurrent(project, srv, *t) }
 	}
 	// A subagent's card belongs in the conversation the person has open, not
 	// in a transcript nobody is reading.
@@ -1915,15 +1934,6 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a co
 		e.publish(s.ID, ev("error", map[string]any{"kind": "allowlist", "message": d.Note}))
 	}
 	return d, record, false
-}
-
-// evaluate asks the policy about one call. An MCP call is judged as the
-// tool this turn offered under that name, never by the name alone.
-func (e *Engine) evaluate(s *Session, runner *tools.Runner, tool, command, path string, mode config.Mode) perms.Action {
-	if t, ok := runner.MCPTools[tool]; ok {
-		return e.perms.EvaluateMCP(t.Server, t.Tool, mode)
-	}
-	return e.perms.Evaluate(s.Project, tool, command, path, runner.Outside(path), mode)
 }
 
 // publishDecided closes a card that is open in the browser. The tab that
@@ -1953,19 +1963,13 @@ func (e *Engine) publishStarted(s *Session, runner *tools.Runner, call llm.ToolC
 	e.publish(s.ID, ev("tool_start", fields))
 }
 
-// execute runs the tool or writes the denial, and appends the tool entry that
-// pairs with the assistant message.
-func (e *Engine) execute(ctx context.Context, s *Session, runner *tools.Runner,
-	call llm.ToolCall, d perms.Decision, record *store.PermissionRecord, index int) store.Entry {
-	return e.appendTool(s, call, record, e.runTool(ctx, s, runner, call, d))
-}
-
 // outcome is what one tool call produced, before it is appended.
 type outcome struct {
-	content   string
-	exitCode  *int
-	truncated bool
-	meta      map[string]any
+	discovered map[string]string
+	content    string
+	exitCode   *int
+	truncated  bool
+	meta       map[string]any
 	// images are the pictures the result carries, already in the file store.
 	images []store.Attachment
 }
@@ -1974,72 +1978,59 @@ type outcome struct {
 // once.
 var readTools = map[string]bool{"read": true, "read_image": true, "grep": true, "web_search": true}
 
-// readsOnly reports whether a tool only reads: a built-in one on the list, or
-// an MCP tool whose server the user marked read only.
-func readsOnly(offer tools.Offer, name string) bool {
-	if t, ok := offer.MCPTool(name); ok {
-		return t.ReadOnly
-	}
-	return readTools[name]
+type readCall struct {
+	target resolvedCall
+	record *store.PermissionRecord
 }
 
-// mcpTable keys the turn's MCP tools by the name each is sent under.
-func mcpTable(offer tools.Offer) map[string]mcp.Offered {
-	if len(offer.MCP) == 0 {
+// readRun binds each consecutive read to its own definition and permission.
+func (e *Engine) readRun(ctx context.Context, s *Session, cfg config.Config, offer tools.Offer, runner *tools.Runner, calls []llm.ToolCall) []readCall {
+	if len(calls) < 2 {
 		return nil
 	}
-	out := make(map[string]mcp.Offered, len(offer.MCP))
-	for _, t := range offer.MCP {
-		out[t.Wire] = t
-	}
-	return out
-}
-
-// readRun is how many calls from i on only read and would run without a card,
-// so they can run at the same time.
-func (e *Engine) readRun(s *Session, cfg config.Config, offer tools.Offer, runner *tools.Runner, calls []llm.ToolCall, i int) int {
-	n := 0
-	for _, call := range calls[i:] {
+	var batch []readCall
+	for _, call := range calls {
 		name := call.Function.Name
-		if !readsOnly(offer, name) || !offer.InMode(name) || !offer.InSet(name) {
+		if (!readTools[name] && name != "tool_call") || !offer.InMode(name) || !offer.InSet(name) {
 			break
 		}
-		command, path := argSummary(call)
-		if e.evaluate(s, runner, name, command, path, cfg.Mode) != perms.ActionAllow {
+		target, err := e.resolveCall(ctx, s, offer.Mode, call)
+		if err != nil || (target.offered != nil && !target.offered.ReadOnly) {
 			break
 		}
-		n++
+		record := permissionRecord(target)
+		if !e.autoAllow(s, runner, cfg.Mode, target.offered, record) {
+			break
+		}
+		batch = append(batch, readCall{target, record})
 	}
-	return n
+	return batch
 }
 
 // runReads runs calls that only read at the same time, and appends their
 // results in the order the model made them.
-func (e *Engine) runReads(ctx context.Context, s *Session, cfg config.Config, a config.Agent,
-	runner *tools.Runner, calls []llm.ToolCall, first int, seen *repeats, offer tools.Offer, clock *turnClock) {
+func (e *Engine) runReads(ctx context.Context, s *Session, a config.Agent,
+	runner *tools.Runner, calls []llm.ToolCall, batch []readCall, first int, seen *repeats, offer tools.Offer, clock *turnClock) {
 	notes := make([]string, len(calls))
-	records := make([]*store.PermissionRecord, len(calls))
 	for k, call := range calls {
 		notes[k] = seen.see(call)
-		// The policy allows each of these, so deciding asks nobody.
-		_, records[k], _ = e.decide(ctx, s, cfg, a, runner, call)
 		e.publishStarted(s, runner, call, first+k)
 	}
 	e.setState(s, StateExecuting)
 	outs := make([]outcome, len(calls))
 	began := time.Now()
 	var wg sync.WaitGroup
-	for k, call := range calls {
+	for k, bound := range batch {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			outs[k] = e.runTool(ctx, s, runner, call, perms.Decision{Kind: perms.DecideOnce})
+			outs[k] = e.runTool(ctx, s, runner, bound.target, perms.Decision{Kind: perms.DecideOnce}, offer.Mode, a.ID, bound.record)
 		}()
 	}
 	wg.Wait()
 	clock.tools += time.Since(began)
 	for k, call := range calls {
-		entry := e.appendTool(s, call, records[k], outs[k])
+		entry := e.appendTool(s, call, batch[k].record, outs[k])
 		if notes[k] != "" {
 			entry = e.addNote(s, entry, notes[k])
 		}
@@ -2056,7 +2047,8 @@ func (e *Engine) runReads(ctx context.Context, s *Session, cfg config.Config, a 
 }
 
 // runTool runs one call, or writes its denial.
-func (e *Engine) runTool(ctx context.Context, s *Session, runner *tools.Runner, call llm.ToolCall, d perms.Decision) outcome {
+func (e *Engine) runTool(ctx context.Context, s *Session, runner *tools.Runner, target resolvedCall, d perms.Decision, mode config.WorkMode, owner string, record *store.PermissionRecord) outcome {
+	call := target.ToolCall
 	var o outcome
 	switch {
 	case d.Kind == perms.DecideDeny:
@@ -2066,6 +2058,8 @@ func (e *Engine) runTool(ctx context.Context, s *Session, runner *tools.Runner, 
 		var res tools.Result
 		var err error
 		switch call.Function.Name {
+		case "tool_search":
+			return e.searchTools(ctx, s, args, runner, mode)
 		case "read":
 			res, err = runner.ReadFile(ctx, args)
 		case "read_image":
@@ -2095,8 +2089,9 @@ func (e *Engine) runTool(ctx context.Context, s *Session, runner *tools.Runner, 
 		case "exit_plan_mode":
 			res, err = e.submitPlan(ctx, s, call)
 		default:
-			if mcp.IsWire(call.Function.Name) {
-				res, err = runner.CallMCP(ctx, call.Function.Name, args)
+			if t := target.offered; t != nil {
+				allowed := e.dispatchPermission(s, owner, runner.Root, *t, record)
+				res, err = runner.CallMCP(ctx, *t, args, allowed)
 				break
 			}
 			err = fmt.Errorf("no tool named %s: use read, read_image, grep, web_search, write, edit, bash, processes, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent or send_message", call.Function.Name)
@@ -2116,6 +2111,12 @@ func (e *Engine) runTool(ctx context.Context, s *Session, runner *tools.Runner, 
 				e.keepImage(&o, &res.Images[i])
 			}
 		}
+	}
+	if t := target.offered; t != nil {
+		if o.meta == nil {
+			o.meta = map[string]any{}
+		}
+		o.meta["server"], o.meta["tool"] = t.Server, t.Tool
 	}
 	return o
 }
@@ -2307,7 +2308,7 @@ func (e *Engine) appendTool(s *Session, call llm.ToolCall, record *store.Permiss
 	return s.appendEntry(store.Entry{Kind: "tool", Role: "tool",
 		ToolCallID: call.ID, ToolName: call.Function.Name, Content: o.content,
 		ExitCode: o.exitCode, Truncated: o.truncated, Permission: record, Meta: o.meta,
-		Attachments: o.images, InContext: true, Visible: true})
+		Discovered: o.discovered, Attachments: o.images, InContext: true, Visible: true})
 }
 
 // refuseImages takes the pictures off the results that follow the last

@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/jesdga95/quecto-harness/internal/config"
-	"github.com/jesdga95/quecto-harness/internal/mcp"
 	"github.com/jesdga95/quecto-harness/internal/search"
 )
 
@@ -55,11 +54,7 @@ type Runner struct {
 	// to the background. Zero waits for its timeout.
 	BackgroundAfter time.Duration
 
-	// MCP runs the tools MCPTools names, keyed by the name each is sent
-	// under. Both are read from the turn's offer, so a tool that is sent and
-	// a tool that runs cannot disagree.
-	MCP      MCPCaller
-	MCPTools map[string]mcp.Offered
+	MCP MCPCaller
 }
 
 // Hide sets the directory no tool may reach, resolved the way Root is.

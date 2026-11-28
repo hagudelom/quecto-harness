@@ -3,7 +3,9 @@ package tools
 import (
 	"bytes"
 	"io"
+	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"unicode/utf8"
 )
@@ -28,6 +30,29 @@ func Truncate(s string, limit int) (string, bool) {
 		return s, false
 	}
 	return s[:head] + "\n... " + strconv.Itoa(omitted) + " bytes omitted ...\n" + s[tailStart:], true
+}
+
+// LimitOutput returns the displayed text and the length of the contiguous
+// prefix available to read, including a saved copy when the output was cut.
+func (r *Runner) LimitOutput(name, text string) (Result, int) {
+	out, cut := Truncate(text, r.OutputLimit)
+	res := Result{Output: out, Truncated: cut, Bytes: len(text)}
+	if !cut {
+		return res, len(text)
+	}
+	head := forwardToNewline(text, r.OutputLimit*2/3)
+	file := r.openSpill(name)
+	if file == nil {
+		return res, head
+	}
+	n, err := file.WriteString(text[:min(len(text), spillCap)])
+	closeErr := file.Close()
+	if err != nil || closeErr != nil {
+		_ = os.Remove(file.Name())
+		return res, head
+	}
+	res.Output += strings.TrimRight(spillNote(file.Name(), n, len(text)), "\n")
+	return res, max(head, n)
 }
 
 // forwardToNewline moves a cut forward to the next line break within 512

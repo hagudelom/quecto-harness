@@ -98,8 +98,10 @@ type FunctionCall struct {
 }
 
 type Tool struct {
-	Type     string       `json:"type"`
-	Function FunctionSpec `json:"function"`
+	// OpenArguments preserves arbitrary properties in a function argument.
+	OpenArguments bool         `json:"-"`
+	Type          string       `json:"type"`
+	Function      FunctionSpec `json:"function"`
 }
 
 type FunctionSpec struct {

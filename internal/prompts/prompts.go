@@ -9,7 +9,7 @@ import (
 	"text/template"
 )
 
-//go:embed system.md system_execute.md mode_plan.md mode_execute.md plan.md plan_approved.md plan_carried.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_read_image.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_processes.md bash_moved.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md not_sent.md denial.md budget_spent.md repeat.md todo_note.md not_run.md outcome_unknown.md plan_continue.md subagent_result.md commit_message.md
+//go:embed tool_search.md tool_call.md system.md system_execute.md mode_plan.md mode_execute.md plan.md plan_approved.md plan_carried.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_read_image.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_processes.md bash_moved.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md not_sent.md denial.md budget_spent.md repeat.md todo_note.md not_run.md outcome_unknown.md plan_continue.md subagent_result.md commit_message.md
 var files embed.FS
 
 // hasTool is the has the prompt templates take: whether the tools a turn sends
@@ -105,9 +105,6 @@ type SystemVars struct {
 	// NotAllTools says the list above is short of every tool the harness
 	// knows, so the rules or the history may name one the model cannot reach.
 	NotAllTools bool
-	// MCPServers names the MCP servers whose tools this turn carries. Empty
-	// leaves the prompt as it is without MCP.
-	MCPServers []string
 }
 
 // System renders the shared head around the body. It is the same in every
@@ -124,9 +121,8 @@ func System(v SystemVars) string {
 	head := struct {
 		SystemVars
 		ToolsLine string
-		MCPLine   string
 		Body      string
-	}{v, strings.Join(v.Tools, ", "), strings.Join(v.MCPServers, ", "), strings.TrimRight(bb.String(), " \t\r\n")}
+	}{v, strings.Join(v.Tools, ", "), strings.TrimRight(bb.String(), " \t\r\n")}
 	var b strings.Builder
 	if err := systemTmpl.Execute(&b, head); err != nil {
 		panic("prompts: render system.md: " + err.Error())
@@ -310,6 +306,8 @@ func NotSent(name, reason string) string {
 	return b.String()
 }
 
+func ToolSearch() string          { return mustRead("tool_search.md") }
+func ToolCall() string            { return mustRead("tool_call.md") }
 func ToolRead() string            { return mustRead("tool_read.md") }
 func ToolReadImage() string       { return mustRead("tool_read_image.md") }
 func ToolGrep() string            { return mustRead("tool_grep.md") }
