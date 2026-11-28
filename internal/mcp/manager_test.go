@@ -653,14 +653,41 @@ func TestReplacementSessionExpiryWaits(t *testing.T) {
 	}
 }
 
-func TestListChangedDuringListIsFetchedNextTurn(t *testing.T) {
+func TestManagerRetriesAnInvalidatedListing(t *testing.T) {
 	h, srv := newHTTPFake(t)
 	h.catalog = []string{"old"}
 	h.notifyDuringList = true
 	m := newTestManager(t, httpServer(srv))
-	m.Tools(context.Background(), "")
-	if got, _ := m.Tools(context.Background(), ""); wires(got) != "mcp__remote__updated" {
-		t.Errorf("Second offer = %s", wires(got))
+	if got, notes := m.Tools(t.Context(), ""); wires(got) != "mcp__remote__updated" || len(notes) != 0 {
+		t.Fatalf("first offer = %s, notes %v", wires(got), notes)
+	}
+}
+
+func TestManagerRefreshesTheCatalogWhenAClientRestarts(t *testing.T) {
+	h, srv := newHTTPFake(t)
+	h.catalog = []string{"before", "after"}
+	server := httpServer(srv)
+	m := newTestManager(t, server)
+	if got, _ := m.Tools(t.Context(), ""); wires(got) != "mcp__remote__before" {
+		t.Fatalf("first offer = %s", wires(got))
+	}
+	in := m.instanceFor(server, "")
+	client, err := in.ensure(t.Context(), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return stateOf(m, server.Name).State == StateFailed })
+	in.mu.Lock()
+	in.retryAt = time.Time{}
+	in.mu.Unlock()
+	if _, err := m.Call(t.Context(), "", server.Name, "echo", nil, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if got, notes := m.Tools(t.Context(), ""); wires(got) != "mcp__remote__after" || len(notes) != 0 {
+		t.Fatalf("offer after restart = %s, notes %v", wires(got), notes)
 	}
 }
 

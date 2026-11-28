@@ -319,15 +319,22 @@ func (m *Manager) listFor(ctx context.Context, s Server, project string) ([]Tool
 		}
 		return nil, errConfigChanged
 	}
-	fresh, generation, err := in.list(ctx, m)
-	if err == nil {
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		var fresh []Tool
+		var generation uint64
+		fresh, generation, err = in.list(ctx, m)
+		if err != nil {
+			break
+		}
 		if fresh == nil {
 			fresh = []Tool{}
 		}
-		if err := m.publishList(in, fresh, generation); err != nil {
-			return nil, err
+		err = m.publishList(in, fresh, generation)
+		if errors.Is(err, errListChanged) {
+			continue
 		}
-		return fresh, nil
+		return fresh, err
 	}
 	m.mu.Lock()
 	saved, ok := m.tools[key]
@@ -355,6 +362,7 @@ func (m *Manager) listFor(ctx context.Context, s Server, project string) ([]Tool
 }
 
 var (
+	errListChanged   = errors.New("the tool list changed during refresh")
 	errStopping      = errors.New("the harness is stopping")
 	errConfigChanged = errors.New("the server configuration changed")
 )
@@ -387,7 +395,7 @@ func (m *Manager) publishList(in *instance, tools []Tool, generation uint64) err
 	}
 	if m.generation[in.key] != generation {
 		m.mu.Unlock()
-		return nil
+		return errListChanged
 	}
 	m.tools[in.key] = tools
 	delete(m.dirty, in.key)
@@ -777,6 +785,7 @@ func (in *instance) ensure(ctx context.Context, m *Manager) (*Client, error) {
 		}
 		in.client, in.state, in.lastErr = c, StateRunning, ""
 		in.mu.Unlock()
+		m.invalidate(in)
 		go in.watch(m, c)
 		return c, nil
 	}
