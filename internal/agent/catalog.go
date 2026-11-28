@@ -177,6 +177,8 @@ func catalogText(e store.Entry) string {
 	return catalogOpen + string(e.Catalog.Signal) + catalogClose
 }
 
+// consulted compares the current definition with the last search result for
+// this tool that the conversation still holds.
 func (s *Session) consulted(t mcp.Offered) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -184,9 +186,6 @@ func (s *Session) consulted(t mcp.Offered) bool {
 		e := s.Entries[i]
 		if !e.InContext {
 			continue
-		}
-		if e.Catalog != nil && e.Catalog.View[t.Server][t.Tool] != t.Version {
-			return false
 		}
 		if v, ok := e.Discovered[t.Wire]; ok {
 			return v == t.Version

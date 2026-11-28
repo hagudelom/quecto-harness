@@ -157,8 +157,8 @@ func TestCatalogRequestHistory(t *testing.T) {
 			if strings.Contains(string(removed.Messages[len(removed.Messages)-2]), "tool_catalog") || !strings.Contains(tail(removed), `<tool_catalog>{"servers":{"removed":["demo"]}}</tool_catalog>`) {
 				t.Fatalf("removal: %s", tail(removed))
 			}
-			if s.consulted(defs[0]) {
-				t.Fatal("removed tool retained its grant")
+			if !s.consulted(defs[0]) {
+				t.Fatal("disabling the server hid an in-context search result")
 			}
 			if err := h.store.Save(s.doc()); err != nil {
 				t.Fatal(err)
@@ -312,6 +312,10 @@ func TestCatalogDiscoveryScope(t *testing.T) {
 	mode = config.WorkPlan
 	if _, err := h.engine.resolveCall(t.Context(), restored, mode, call); err != mcp.ErrToolChanged {
 		t.Fatalf("plan: %v", err)
+	}
+	restored.rewindTo(0)
+	if _, err := h.engine.resolveCall(t.Context(), restored, config.WorkExecute, call); err != mcp.ErrToolChanged {
+		t.Fatalf("rewound search: %v", err)
 	}
 }
 

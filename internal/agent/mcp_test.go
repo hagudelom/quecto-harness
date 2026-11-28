@@ -150,6 +150,91 @@ func TestMCPToolCall(t *testing.T) {
 	}
 }
 
+func TestMCPCallAfterReactivation(t *testing.T) {
+	for _, scenario := range []string{"unchanged", "schema changed", "search compacted"} {
+		t.Run(scenario, func(t *testing.T) {
+			h := newHarness(t)
+			if _, err := h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeFull }); err != nil {
+				t.Fatal(err)
+			}
+			server := mcpFake("fake")
+			dir := t.TempDir()
+			state, log := filepath.Join(dir, "schema"), filepath.Join(dir, "call")
+			server.Env["TOOL_STATE"], server.Env["CALL_LOG"] = state, log
+			manager := withMCP(t, h, server)
+			s := h.session(t)
+			setEnabled := func(enabled bool) {
+				t.Helper()
+				server.Enabled = enabled
+				resolved, err := h.cfg.SetMCP([]config.MCPServer{server})
+				if err != nil {
+					t.Fatal(err)
+				}
+				manager.Configure(resolved)
+			}
+			send := func(message string, fixtures ...string) {
+				t.Helper()
+				h.replay.forModel(h.agent.Model, fixtures...)
+				if _, err := h.engine.Send(s.ID, message, nil); err != nil {
+					t.Fatal(err)
+				}
+				waitIdle(t, s)
+			}
+			send("Find echo.", "stream_search.txt", "stream_plain.txt")
+			setEnabled(false)
+			message := "Call echo."
+			if scenario == "search compacted" {
+				message += strings.Repeat(" More context.", compactFloor/10)
+			}
+			send(message, "stream_mcp.txt", "stream_plain.txt")
+			if _, err := os.Stat(log); !os.IsNotExist(err) {
+				t.Fatalf("disabled server received a call: %v", err)
+			}
+
+			switch scenario {
+			case "schema changed":
+				if err := os.WriteFile(state, nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "search compacted":
+				h.replay.forModel(h.agent.Model, "stream_summary.txt")
+				if err := h.engine.Compact(s.ID); err != nil {
+					t.Fatal(err)
+				}
+				waitIdle(t, s)
+				doc, _, _, _ := s.Snapshot()
+				for _, entry := range doc.Entries {
+					if entry.ToolName == "tool_search" && entry.InContext {
+						t.Fatal("compaction kept the search result")
+					}
+				}
+			}
+			setEnabled(true)
+			send("Call echo again.", "stream_mcp.txt", "stream_plain.txt")
+			raw, err := os.ReadFile(log)
+			if scenario == "unchanged" {
+				if err != nil || string(raw) != `{"text":"hi"}` {
+					t.Fatalf("reactivated call = %s, %v", raw, err)
+				}
+				return
+			}
+			if !os.IsNotExist(err) {
+				t.Fatalf("stale search reached the server: %s, %v", raw, err)
+			}
+			doc, _, _, _ := s.Snapshot()
+			var results []string
+			for _, entry := range doc.Entries {
+				if entry.ToolName == "tool_call" {
+					results = append(results, entry.Content)
+				}
+			}
+			if len(results) != 2 || results[0] != mcp.ErrToolChanged.Error() || results[1] != mcp.ErrToolChanged.Error() {
+				t.Fatalf("disabled and reactivated calls: %q", results)
+			}
+		})
+	}
+}
+
 func TestMCPNothingConfiguredChangesNothing(t *testing.T) {
 	h := newHarness(t)
 	s := h.session(t)
