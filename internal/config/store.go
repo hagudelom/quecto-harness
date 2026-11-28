@@ -80,7 +80,13 @@ func (s *Store) Paths() Paths { return s.paths }
 func (s *Store) Config() Config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.snapshotConfig()
+}
+
+// snapshotConfig copies the settings while the caller holds the lock.
+func (s *Store) snapshotConfig() Config {
 	c := s.cfg
+	c.MCPConfigured = len(s.mcp) > 0
 	c.Projects = append([]string(nil), s.cfg.Projects...)
 	c.Agents = cloneAgents(s.cfg.Agents)
 	c.Search.Accounts = cloneSearchAccounts(s.cfg.Search.Accounts)
@@ -98,18 +104,13 @@ func (s *Store) Notes() []string {
 func (s *Store) Update(fn func(*Config)) (Config, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	next := s.cfg
-	next.Projects = append([]string(nil), s.cfg.Projects...)
-	next.Agents = cloneAgents(s.cfg.Agents)
-	next.Search.Accounts = cloneSearchAccounts(s.cfg.Search.Accounts)
+	next := s.snapshotConfig()
 	fn(&next)
 	resolved, notes := next.File().Resolve(Defaults())
 	s.cfg = resolved
 	s.notes = notes
-	if err := s.persistConfig(); err != nil {
-		return s.cfg, err
-	}
-	return s.cfg, nil
+	err := s.persistConfig()
+	return s.snapshotConfig(), err
 }
 
 // persistConfig writes config.json. The caller holds the lock.

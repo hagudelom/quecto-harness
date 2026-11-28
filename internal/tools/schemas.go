@@ -2,6 +2,7 @@ package tools
 
 import (
 	"encoding/json"
+	"slices"
 
 	"github.com/jesdga95/quecto-harness/internal/config"
 	"github.com/jesdga95/quecto-harness/internal/llm"
@@ -16,12 +17,13 @@ var schemas = buildSchemas()
 // Offer says which tools belong in this turn's request, which of them the
 // harness toolset offers at all, and which of those the session's mode lets run.
 type Offer struct {
-	Set     config.Toolset
-	Mode    config.WorkMode
-	Ask     bool
-	Agents  bool
-	Message bool
-	Search  bool
+	Set           config.Toolset
+	Mode          config.WorkMode
+	Ask           bool
+	Agents        bool
+	Message       bool
+	Search        bool
+	MCPConfigured bool
 }
 
 // modeTools is the fixed list each mode may run. Plan holds no tool that
@@ -66,10 +68,15 @@ func Names(o Offer) []string {
 	return out
 }
 
-// AllCount is the number of tools the harness knows, which is the ceiling a
-// turn's list can reach. A list short of it means the rules or the history
-// may name a tool the model cannot reach.
-func AllCount() int { return len(schemas) }
+var catalogTools = []string{"tool_search", "tool_call"}
+
+// AllCount is the number of tools available before toolset and session restrictions.
+func (o Offer) AllCount() int {
+	if o.MCPConfigured {
+		return len(schemas)
+	}
+	return len(schemas) - len(catalogTools)
+}
 
 // Known reports whether a tool of that name exists in any mode.
 func Known(name string) bool {
@@ -111,7 +118,9 @@ func InSet(set config.Toolset, name string) bool {
 	return false
 }
 
-func (o Offer) InSet(name string) bool { return InSet(o.Set, name) }
+func (o Offer) InSet(name string) bool {
+	return InSet(o.Set, name) && (o.MCPConfigured || !slices.Contains(catalogTools, name))
+}
 
 // Sends reports whether a tool is in this turn's request, which depends on
 // what the harness offers and what the session is offered, and not on its mode.

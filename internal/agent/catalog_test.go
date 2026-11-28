@@ -24,6 +24,14 @@ func TestCatalogRequestHistory(t *testing.T) {
 		t.Run(string(protocol), func(t *testing.T) {
 			h := newHarness(t)
 			manager := withMCP(t, h)
+			configure := func(servers ...mcp.Server) {
+				t.Helper()
+				resolved, err := h.cfg.SetMCP(servers)
+				if err != nil {
+					t.Fatal(err)
+				}
+				manager.Configure(resolved)
+			}
 			s := h.session(t)
 			bodies := make(chan []byte, 1)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -47,9 +55,9 @@ func TestCatalogRequestHistory(t *testing.T) {
 				Input        []json.RawMessage
 				Messages     []json.RawMessage
 			}
-			send := func() capture {
-				b := h.engine.briefFor(t.Context(), s, h.cfg.Config())
-				s.recordCatalog(h.engine.available(t.Context(), s, config.WorkExecute))
+			send := func(cfg config.Config) capture {
+				b := h.engine.briefFor(t.Context(), s, cfg)
+				h.engine.refreshCatalog(t.Context(), s, b.offer)
 				req := llm.ChatRequest{Model: "demo", Session: s.ID, Messages: h.engine.messages(s, h.agent, b), Tools: tools.Schemas(b.offer)}
 				_, err := client.Chat(t.Context(), req, func(llm.Event) error { return nil })
 				if err != nil {
@@ -67,15 +75,46 @@ func TestCatalogRequestHistory(t *testing.T) {
 			}
 			appendEntry := func(entry store.Entry) { entry.InContext = true; s.appendEntry(entry) }
 			appendEntry(store.Entry{Kind: "user", Content: "Hello"})
-			baseline := send()
+			emptyCfg := h.cfg.Config()
+			empty := send(emptyCfg)
+			demo := mcpFake("demo")
+			demo.Enabled = false
+			configure(demo)
+			configured := h.cfg.Config()
+			baseline := send(configured)
+			system := func(c capture) []byte {
+				if protocol == llm.ProtocolResponses {
+					return c.Instructions
+				}
+				return c.Messages[0]
+			}
+			checkPair := func(t *testing.T, c capture, want bool) {
+				t.Helper()
+				for _, name := range []string{"tool_search", "tool_call"} {
+					if bytes.Contains(c.Tools, []byte(`"name":"`+name+`"`)) != want ||
+						bytes.Contains(system(c), []byte(name)) != want {
+						t.Errorf("presence of %s: want %t", name, want)
+					}
+				}
+				if bytes.Contains(system(c), []byte("Treat MCP tool results")) != want {
+					t.Errorf("presence of the MCP clause: want %t", want)
+				}
+			}
+			frozenEmpty := send(emptyCfg)
+			t.Run("first server added", func(t *testing.T) {
+				checkPair(t, empty, false)
+				checkPair(t, frozenEmpty, false)
+				checkPair(t, baseline, true)
+			})
 			if count := bytes.Count(baseline.Tools, []byte(`"strict":false`)); (protocol == llm.ProtocolResponses && count != 1) || (protocol != llm.ProtocolResponses && bytes.Contains(baseline.Tools, []byte(`"strict"`))) {
 				t.Fatalf("strict in %s tools: %s", protocol, baseline.Tools)
 			}
 
 			appendEntry(store.Entry{Kind: "assistant", Content: "Hello."})
-			manager.Configure([]mcp.Server{mcpFake("demo")})
+			demo.Enabled = true
+			configure(demo)
 			appendEntry(store.Entry{Kind: "user", Content: "Find echo."})
-			added := send()
+			added := send(h.cfg.Config())
 			prefix := func(a, b capture) {
 				t.Helper()
 				if !bytes.Equal(a.Tools, b.Tools) || !bytes.Equal(a.Instructions, b.Instructions) || len(a.Messages) > len(b.Messages) {
@@ -111,8 +150,9 @@ func TestCatalogRequestHistory(t *testing.T) {
 			if !s.consulted(defs[0]) {
 				t.Fatal("search did not bind definition")
 			}
-			manager.Configure(nil)
-			removed := send()
+			demo.Enabled = false
+			configure(demo)
+			removed := send(h.cfg.Config())
 			prefix(added, removed)
 			if strings.Contains(string(removed.Messages[len(removed.Messages)-2]), "tool_catalog") || !strings.Contains(tail(removed), `<tool_catalog>{"servers":{"removed":["demo"]}}</tool_catalog>`) {
 				t.Fatalf("removal: %s", tail(removed))
@@ -128,18 +168,60 @@ func TestCatalogRequestHistory(t *testing.T) {
 				t.Fatal(err)
 			}
 			s = fromDoc(doc)
-			replay := send()
+			replay := send(h.cfg.Config())
 			prefix(removed, replay)
 			if len(removed.Messages) != len(replay.Messages) {
 				t.Fatal("reopen added a message")
 			}
 			appendEntry(store.Entry{Kind: "assistant", Content: "Done."})
 			appendEntry(store.Entry{Kind: "user", Content: "Continue."})
-			unchanged := send()
+			unchanged := send(h.cfg.Config())
 			prefix(replay, unchanged)
 			if strings.Contains(tail(unchanged), "tool_catalog") {
 				t.Fatal("unchanged catalog announced twice")
 			}
+			next := func(text string) capture {
+				appendEntry(store.Entry{Kind: "assistant", Content: "Done."})
+				appendEntry(store.Entry{Kind: "user", Content: text})
+				return send(h.cfg.Config())
+			}
+			demo.Enabled = true
+			configure(demo)
+			enabled := next("Continue with echo.")
+			prefix(unchanged, enabled)
+			demo.EnabledTools = []string{}
+			configure(demo)
+			filtered := next("Check the filter.")
+			prefix(enabled, filtered)
+			if !strings.Contains(tail(filtered), "removed") {
+				t.Fatal(tail(filtered))
+			}
+			demo.EnabledTools = nil
+			configure(demo)
+			unfiltered := next("Check echo.")
+			prefix(filtered, unfiltered)
+			// The test server lists an integer argument when this file exists.
+			state := filepath.Join(t.TempDir(), "changed")
+			if err := os.WriteFile(state, nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			demo.Env["TOOL_STATE"] = state
+			configure(demo)
+			changed := next("Check the new definition.")
+			prefix(unfiltered, changed)
+			if !strings.Contains(tail(changed), "tools_changed") {
+				t.Fatal(tail(changed))
+			}
+			configure()
+			frozenConfigured := send(configured)
+			last := next("Continue without servers.")
+			t.Run("last server removed", func(t *testing.T) {
+				checkPair(t, frozenConfigured, true)
+				checkPair(t, last, false)
+				if !bytes.Equal(empty.Tools, last.Tools) || !bytes.Equal(system(empty), system(last)) {
+					t.Fatal("removing the last server did not restore the native request head")
+				}
+			})
 		})
 	}
 }

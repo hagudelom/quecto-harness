@@ -311,7 +311,11 @@ func (e *Engine) unavailable(s *Session, call llm.ToolCall, offer tools.Offer) s
 	name := call.Function.Name
 	content := fmt.Sprintf("%s is not available in %s mode", name, offer.Mode)
 	if offer.InMode(name) && !offer.InSet(name) {
-		content = fmt.Sprintf("%s is not available: the toolset is %s", name, offer.Set)
+		if tools.InSet(offer.Set, name) {
+			content = fmt.Sprintf("%s is not available: no MCP servers were configured for this turn", name)
+		} else {
+			content = fmt.Sprintf("%s is not available: the toolset is %s", name, offer.Set)
+		}
 	}
 	s.mu.Lock()
 	entry := s.appendEntry(store.Entry{Kind: "tool", Role: "tool",

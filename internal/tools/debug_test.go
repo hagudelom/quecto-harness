@@ -12,8 +12,8 @@ import (
 func TestTheDebugViewSpellsOutTheParameters(t *testing.T) {
 	full := Offer{Set: config.ToolsetFull, Mode: config.WorkExecute, Ask: true, Agents: true, Message: true, Search: true}
 	specs := DebugTools(full)
-	if len(specs) != AllCount() {
-		t.Fatalf("the view lists %d tools, want %d", len(specs), AllCount())
+	if len(specs) != full.AllCount() {
+		t.Fatalf("the view lists %d tools, want %d", len(specs), full.AllCount())
 	}
 	byName := make(map[string]ToolDebug, len(specs))
 	for _, s := range specs {

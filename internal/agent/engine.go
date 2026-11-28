@@ -1319,7 +1319,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		}
 
 		e.setState(s, StateStreaming)
-		if s.recordCatalog(e.available(ctx, s, b.offer.Mode)) {
+		if e.refreshCatalog(ctx, s, b.offer) {
 			e.saveSoon(s)
 		}
 		msgs := e.messages(s, a, b)

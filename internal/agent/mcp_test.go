@@ -3,7 +3,9 @@ package agent
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -151,14 +153,24 @@ func TestMCPToolCall(t *testing.T) {
 func TestMCPNothingConfiguredChangesNothing(t *testing.T) {
 	h := newHarness(t)
 	s := h.session(t)
-	cfg := h.cfg.Config()
-	before := h.engine.briefFor(context.Background(), s, cfg)
-	withMCP(t, h)
-	after := h.engine.briefFor(context.Background(), s, cfg)
-	a, _ := json.Marshal(tools.Schemas(before.offer))
-	b, _ := json.Marshal(tools.Schemas(after.offer))
-	if string(a) != string(b) {
-		t.Fatal("an empty server list changed the tools sent")
+	rendered := newSession("reference", "/project", "local", "demo", config.ToolsetFull)
+	// These digests cover the native tool definitions and prompt at fixed project, OS and date.
+	for _, state := range []string{"missing", "empty"} {
+		if state == "empty" {
+			withMCP(t, h)
+		}
+		b := h.engine.briefFor(t.Context(), s, h.cfg.Config())
+		raw, err := json.Marshal(tools.Schemas(b.offer))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fmt.Sprintf("%x", sha256.Sum256(raw)); got != "3a49aa38696d3a5a5fd1308210c72ad551ab92545e6f2a5c305e4303e21b1686" {
+			t.Errorf("%s mcp.json: native tool definitions changed: %s", state, raw)
+		}
+		system := rendered.systemMessage(h.agent, "linux", "2026-01-01", b)
+		if got := fmt.Sprintf("%x", sha256.Sum256([]byte(system.Content))); got != "6f366197d53f42b9fb20a764abf1e42e2dbfa01208b81af381e40591aa77a794" {
+			t.Errorf("%s mcp.json: system prompt changed: %s", state, system.Content)
+		}
 	}
 	if _, err := os.Stat(filepath.Join(h.paths.Home, "mcp")); !os.IsNotExist(err) {
 		t.Fatal("an empty server list wrote a cache")
@@ -282,7 +294,7 @@ func TestParallelDiscoveredReads(t *testing.T) {
 	for _, server := range []string{"a", "b", "writer"} {
 		calls = append(calls, llm.ToolCall{ID: server, Function: llm.FunctionCall{Name: "tool_call", Arguments: `{"name":"mcp__` + server + `__echo","arguments":{}}`}})
 	}
-	offer := tools.Offer{Mode: s.Mode, Set: s.Toolset}
+	offer := h.engine.briefFor(t.Context(), s, cfg).offer
 	if target, err := h.engine.resolveCall(t.Context(), s, s.Mode, calls[2]); err != nil || target.offered == nil || target.offered.ReadOnly {
 		t.Fatalf("expected a discovered writable tool: %v, %v", target.offered, err)
 	}

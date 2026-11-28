@@ -1423,8 +1423,8 @@ func TestTheToolsDebugView(t *testing.T) {
 	f := newFixture(t)
 	body := decode(t, f.do(t, "GET", "/api/tools", nil))
 	list, _ := body["tools"].([]any)
-	if len(list) != 16 {
-		t.Fatalf("the view lists %d tools, want 16", len(list))
+	if len(list) != 14 {
+		t.Fatalf("the view lists %d tools, want 14", len(list))
 	}
 	sent, _ := body["sent"].(map[string]any)
 	minimal, _ := sent["minimal"].([]any)
@@ -1440,8 +1440,22 @@ func TestTheToolsDebugView(t *testing.T) {
 		t.Errorf("the minimal prompt names a tool it does not send: %q", p)
 	}
 	p, _ = prompts["full"].(string)
-	if !strings.Contains(p, "Tools: read, read_image, grep, web_search, write, edit, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent, send_message, bash, processes, tool_search, tool_call.") {
+	if !strings.Contains(p, "Tools: read, read_image, grep, web_search, write, edit, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent, send_message, bash, processes.") {
 		t.Errorf("the full prompt does not name every tool: %q", p)
+	}
+	if strings.Contains(p, "not in that list") {
+		t.Errorf("the full prompt reports missing tools: %q", p)
+	}
+	if _, err := f.cfg.SetMCP([]config.MCPServer{{Name: "docs", Command: "docs", Transport: "stdio", Enabled: false}}); err != nil {
+		t.Fatal(err)
+	}
+	configured := decode(t, f.do(t, "GET", "/api/tools", nil))
+	prompts = configured["prompts"].(map[string]any)
+	if full := prompts["full"].(string); !strings.Contains(full, "processes, tool_search, tool_call.") || strings.Contains(full, "not in that list") {
+		t.Errorf("full prompt with a disabled server: %q", full)
+	}
+	if prompts["minimal"] != body["prompts"].(map[string]any)["minimal"] {
+		t.Fatal("configuring a server changed the minimal prompt")
 	}
 }
 

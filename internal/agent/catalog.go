@@ -105,6 +105,14 @@ func catalogSignal(changes []catalogChange) json.RawMessage {
 	return encode(firstTooLarge)
 }
 
+func (e *Engine) refreshCatalog(ctx context.Context, s *Session, offer tools.Offer) bool {
+	var inventory []mcp.Offered
+	if offer.Sends("tool_search") {
+		inventory = e.available(ctx, s, offer.Mode)
+	}
+	return s.recordCatalog(inventory)
+}
+
 func (s *Session) recordCatalog(offers []mcp.Offered) bool {
 	view := store.CatalogView{}
 	for _, t := range offers {

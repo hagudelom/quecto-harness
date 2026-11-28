@@ -642,7 +642,7 @@ func (s *Session) systemMessage(a config.Agent, osName, date string, b brief) ll
 		Rules: b.rules, RulesName: b.rulesName,
 		Instructions: a.Instructions,
 		Tools:        names,
-		NotAllTools:  len(names) < tools.AllCount(),
+		NotAllTools:  len(names) < b.offer.AllCount(),
 	})
 	return llm.Message{Role: "system", Content: content}
 }

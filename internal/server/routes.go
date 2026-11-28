@@ -988,12 +988,13 @@ func (s *Server) getTools(w http.ResponseWriter, r *http.Request) {
 	}
 	day := time.Now().Format("2006-01-02")
 	offer := func(set config.Toolset) tools.Offer {
-		return tools.Offer{Set: set, Mode: config.WorkExecute, Ask: true, Agents: true, Message: true, Search: true}
+		return tools.Offer{Set: set, Mode: config.WorkExecute, Ask: true, Agents: true, Message: true, Search: true, MCPConfigured: cfg.MCPConfigured}
 	}
 	sent := map[string][]string{}
 	rendered := map[string]string{}
 	for _, set := range []config.Toolset{config.ToolsetFull, config.ToolsetMinimal} {
-		names := tools.Names(offer(set))
+		o := offer(set)
+		names := tools.Names(o)
 		sent[string(set)] = names
 		rendered[string(set)] = prompts.System(prompts.SystemVars{
 			Project:     project,
@@ -1003,7 +1004,7 @@ func (s *Server) getTools(w http.ResponseWriter, r *http.Request) {
 			CanMessage:  true,
 			CanSearch:   true,
 			Tools:       names,
-			NotAllTools: len(names) < tools.AllCount(),
+			NotAllTools: len(names) < o.AllCount(),
 		})
 	}
 	writeJSON(w, http.StatusOK, struct {

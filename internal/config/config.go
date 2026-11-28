@@ -99,8 +99,10 @@ type Config struct {
 	// MaxToolCalls bounds the tool calls one turn may make. Zero is no bound,
 	// which leaves the Stop button as the only thing that ends a runaway turn.
 	MaxToolCalls int
-	Search       Search
-	Projects     []string
+	// MCPConfigured reports whether mcp.json lists any servers, including disabled ones.
+	MCPConfigured bool
+	Search        Search
+	Projects      []string
 }
 
 // Search is where a web search goes. Provider names the service; empty is

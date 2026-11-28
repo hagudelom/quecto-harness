@@ -563,7 +563,7 @@ func TestLooksBinary(t *testing.T) {
 }
 
 func TestSchemasMatchTheDescriptions(t *testing.T) {
-	s := Schemas(Offer{Mode: config.WorkExecute, Ask: true, Agents: true, Message: true, Search: true})
+	s := Schemas(Offer{Mode: config.WorkExecute, Ask: true, Agents: true, Message: true, Search: true, MCPConfigured: true})
 	names := []string{"read", "read_image", "grep", "web_search", "write", "edit", "todo_write",
 		"ask_user_question", "write_plan", "exit_plan_mode", "subagent", "send_message", "bash", "processes", "tool_search", "tool_call"}
 	if len(s) != len(names) {
@@ -1260,7 +1260,7 @@ func TestSchemasFollowTheOffer(t *testing.T) {
 		}
 		return out
 	}
-	base := []string{"read", "read_image", "grep", "write", "edit", "todo_write", "bash", "processes", "tool_search", "tool_call"}
+	base := []string{"read", "read_image", "grep", "write", "edit", "todo_write", "bash", "processes"}
 	optional := map[string]Offer{
 		"ask_user_question": {Mode: config.WorkExecute, Ask: true},
 		"subagent":          {Mode: config.WorkExecute, Agents: true},

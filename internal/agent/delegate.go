@@ -99,7 +99,7 @@ func (e *Engine) briefFor(ctx context.Context, s *Session, cfg config.Config) br
 	rules, rulesName, note := readRules(project)
 	e.showRulesNote(s, note)
 	b := brief{rules: rules, rulesName: rulesName}
-	b.offer = tools.Offer{Set: set, Mode: mode, Ask: parent == "", Message: true, Search: cfg.Search.Enabled()}
+	b.offer = tools.Offer{Set: set, Mode: mode, Ask: parent == "", Message: true, Search: cfg.Search.Enabled(), MCPConfigured: cfg.MCPConfigured}
 	if parent != "" {
 		// A subagent hands work to nobody and asks nobody, but it still
 		// searches: research delegated down is what web_search is for.
