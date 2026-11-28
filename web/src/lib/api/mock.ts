@@ -1416,9 +1416,8 @@ export class MockApi implements HarnessApi {
     // A compaction is not stoppable, the way the harness refuses it.
     if (run && run.session === session && !run.compacting) run.cancelled = true;
     if (this.pending) this.resolvePending({ decision: "deny", reason: "stopped" });
-    // The turn is unwound by the cancel the settle carries, the way a stop
-    // under a permission card is.
-    if (this.openQuestion) this.settleQuestion({ options: [], text: "" });
+    // Release the waiting question so the tool can publish its stopped result.
+    if (this.openQuestion?.session === session) this.settleQuestion({ options: [], text: "" });
   }
 
   async compact(session: string): Promise<void> {
@@ -1589,19 +1588,26 @@ export class MockApi implements HarnessApi {
           },
         });
         this.emit(session, { type: "status", status: "waiting" });
-        const lines: string[] = [];
+        const blocks: string[] = [];
+        let separator = "\n";
         for (const [index, q] of qs.entries()) {
           const askId = nextId("ask");
           this.send(session, t, { type: "question", id: askCall, ask: askId, index });
           const chosen = await this.askQuestion(askId, session, turn);
+          if (turn.cancelled) break;
           const text = answerText(q.options, chosen.options, chosen.text);
-          lines.push(qs.length === 1 ? text : `${index + 1}. ${q.question} ${text}`);
+          let gap = " ";
+          if (text.includes("\n")) {
+            gap = "\n\n";
+            separator = "\n\n";
+          }
+          blocks.push(qs.length === 1 ? text : `${index + 1}. ${q.question}${gap}${text}`);
         }
         this.emit(session, { type: "status", status: "running" });
         this.send(session, t, {
           type: "tool_output",
           id: askCall,
-          output: lines.join("\n"),
+          output: turn.cancelled ? "no answer: the session was stopped" : blocks.join(separator),
           exit_code: null,
           truncated: false,
         });
@@ -1920,7 +1926,7 @@ export class MockApi implements HarnessApi {
       this.openQuestion = {
         id,
         session,
-        settle: (a) => (turn.cancelled ? reject(new Cancelled()) : resolve(a)),
+        settle: resolve,
       };
     });
   }

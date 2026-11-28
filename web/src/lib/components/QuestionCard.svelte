@@ -2,7 +2,10 @@
   import CheckSquare from "phosphor-svelte/lib/CheckSquareIcon";
   import Square from "phosphor-svelte/lib/SquareIcon";
   import type { TranscriptItem } from "../api";
-  import { answer, stop } from "../state/app.svelte";
+  import QuoteFields from "./QuoteFields.svelte";
+  import { quoted, takeQuotes } from "../state/quotes.svelte";
+  import { withQuotes } from "../quote";
+  import { answer, app, stop } from "../state/app.svelte";
   import { asked } from "../question";
 
   // The body of the composer while a call waits on the reader. The field
@@ -17,7 +20,8 @@
   const cur = $derived(questions[current] ?? { question: "", options: [], multi: false });
   const last = $derived(current >= questions.length - 1);
   // Between one answer and the next question the call has no id to answer.
-  const open = $derived(item.askId !== undefined);
+  let submitting = $state(false);
+  const open = $derived(item.askId !== undefined && !submitting);
 
   let chosen = $state<number[]>([]);
   let typed = $state("");
@@ -41,12 +45,27 @@
     chosen = chosen.includes(i) ? chosen.filter((n) => n !== i) : [...chosen, i].sort();
   }
 
-  function send(options: number[]): void {
-    if (!open || (options.length === 0 && typed.trim() === "")) return;
-    const a = { options, text: typed.trim() };
-    chosen = [];
-    typed = "";
-    void answer(item, a);
+  const hasText = $derived(typed.trim() !== "" || quoted.items.length > 0);
+
+  async function send(options: number[], freeAnswer: boolean): Promise<void> {
+    if (!open || (!options.length && !hasText)) return;
+    const session = app.sessionId;
+    const drafts = freeAnswer ? takeQuotes() : [];
+    const a = { options, text: withQuotes(drafts, typed) };
+    submitting = true;
+    if (await answer(item, a, drafts.length > 0)) {
+      chosen = [];
+      typed = "";
+    } else if (drafts.length && app.sessionId === session) {
+      quoted.items = [...drafts, ...quoted.items];
+    }
+    submitting = false;
+  }
+
+  function onkeydown(event: KeyboardEvent) {
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+    event.preventDefault();
+    if (!event.repeat) void send(chosen, true);
   }
 </script>
 
@@ -70,7 +89,7 @@
         class="popover-item"
         aria-pressed={cur.multi ? chosen.includes(i) : undefined}
         disabled={!open}
-        onclick={() => (cur.multi ? toggle(i) : send([i]))}
+        onclick={() => (cur.multi ? toggle(i) : send([i], false))}
       >
         {#if cur.multi}
           {#if chosen.includes(i)}
@@ -89,19 +108,22 @@
     {/each}
   </div>
 
-  <div class="mt-2 flex items-center gap-2 border-t border-hair pt-3">
+  <div class="mt-2 border-t border-hair pt-3">
+    <QuoteFields field={input} disabled={!open} {onkeydown} />
+  </div>
+  <div class="flex items-center gap-2">
     <input
       bind:this={input}
       class="min-w-0 flex-1 border-0 bg-transparent py-1.5 text-[15px] text-ink outline-none placeholder:text-muted"
       placeholder="Or answer in your own words"
       bind:value={typed}
       disabled={!open}
-      onkeydown={(e) => e.key === "Enter" && send(chosen)}
+      {onkeydown}
     />
     <button
       class="chip chip-brand chip-tall"
-      disabled={!open || (chosen.length === 0 && typed.trim() === "")}
-      onclick={() => send(chosen)}
+      disabled={!open || (chosen.length === 0 && !hasText)}
+      onclick={() => send(chosen, true)}
     >
       {many && !last ? "Next" : "Send"}
     </button>

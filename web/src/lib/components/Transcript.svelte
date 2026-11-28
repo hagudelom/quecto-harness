@@ -320,21 +320,18 @@
   </div>
 {/snippet}
 
-<!-- Quoted passages lead the message as blockquotes and draw as blocks of
-     their own above what was typed. -->
+<!-- Quoted passages and reply paragraphs follow their order in the message. -->
 {#snippet message(text: string)}
-  {@const split = splitQuotes(text)}
-  {#if split.quotes.length > 0}
-    <div class="quotes">
-      {#each split.quotes as q, i (i)}
-        <div class="quote"><span class="quote-text">{q}</span></div>
-      {/each}
-    </div>
-  {/if}
-  {#if split.body}
-    <!-- A file quoted with @ opens in the panel, as a file named in a reply does. -->
-    <p class="bubble-text" use:fileLinks>{#each mentions(split.body) as part, i (i)}{#if "ref" in part}{@html fileLinkHtml(part.ref, part.label, true)}{:else}{part.text}{/if}{/each}</p>
-  {/if}
+  {#each splitQuotes(text) as segment, i (i)}
+    {#if segment.kind === "quote"}
+      <div class="quote"><span class="quote-text">{segment.text}</span></div>
+    {:else if segment.kind === "break"}
+      <hr class="my-2 border-hair" />
+    {:else}
+      <!-- A file named with @ opens in the panel. -->
+      <p class="bubble-text" use:fileLinks>{#each mentions(segment.text) as part, j (j)}{#if "ref" in part}{@html fileLinkHtml(part.ref, part.label, true)}{:else}{part.text}{/if}{/each}</p>
+    {/if}
+  {/each}
 {/snippet}
 
 <!-- The clock is aria-hidden: a reader does not need it announced every

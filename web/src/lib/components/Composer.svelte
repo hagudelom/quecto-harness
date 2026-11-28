@@ -7,7 +7,7 @@
   import AgentChip from "./AgentChip.svelte";
   import ModeChip from "./ModeChip.svelte";
   import PermissionChip from "./PermissionChip.svelte";
-  import X from "phosphor-svelte/lib/XIcon";
+  import QuoteFields from "./QuoteFields.svelte";
   import FileIcon from "./FileIcon.svelte";
   import PermissionCard from "./PermissionCard.svelte";
   import QuestionCard from "./QuestionCard.svelte";
@@ -32,7 +32,7 @@
   import { previewKind, sheetText } from "../attachments";
   import AttachmentTile from "./AttachmentTile.svelte";
   import { withQuotes } from "../quote";
-  import { quoted, removeQuote, takeQuotes } from "../state/quotes.svelte";
+  import { quoted, takeQuotes } from "../state/quotes.svelte";
   import { overlayOpen } from "../overlay";
 
   let {
@@ -133,14 +133,6 @@
     return () => window.removeEventListener(COMPOSE_EVENT, focus);
   });
 
-  // A passage just quoted is answered next, so the field takes the caret.
-  let seen = quoted.added;
-  $effect(() => {
-    if (quoted.added === seen) return;
-    seen = quoted.added;
-    field?.focus();
-  });
-
   // A quote belongs to the transcript it came from.
   let quotedIn = app.sessionId;
   $effect(() => {
@@ -197,6 +189,20 @@
     const item = pendingQuestion();
     return item?.kind === "tool" && item.name === "ask_user_question" ? item : undefined;
   });
+  // Return the caret to the pending reply when its question card closes.
+  let questionSession: string | undefined;
+  $effect(() => {
+    if (question) {
+      questionSession = app.sessionId;
+      return;
+    }
+    if (questionSession === app.sessionId && quoted.items.length && document.activeElement === document.body) {
+      const reply = box?.querySelector<HTMLTextAreaElement>(".quote-reply");
+      (reply ?? field)?.focus();
+    }
+    questionSession = undefined;
+  });
+
   const blocked = $derived(asking || blockingPermission() !== undefined);
   // A compaction holds the session but is not offered a stop: it draws nothing
   // to take back. The send button stays, and what it takes joins the queue.
@@ -353,9 +359,11 @@
         return;
       }
     }
-    if (event.key === "Enter" && !event.shiftKey) {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
+      if (event.repeat) return;
       submit();
+      field?.focus();
     }
   }
 </script>
@@ -396,18 +404,7 @@
         </div>
       {/if}
 
-      {#if quoted.items.length > 0}
-        <div class="quotes mb-3">
-          {#each quoted.items as q, i (i)}
-            <div class="quote">
-              <span class="quote-text">{q}</span>
-              <button class="quote-x" aria-label="Remove quote" onclick={() => removeQuote(i)}>
-                <X size={12} />
-              </button>
-            </div>
-          {/each}
-        </div>
-      {/if}
+      <QuoteFields {field} {disabled} {onkeydown} />
 
       <div class="relative">
       {#if mention && hits.length > 0}

@@ -726,13 +726,16 @@ export async function decide(
   }
 }
 
-/** The answer is written onto the row before it is sent, so the card closes on
-    the click rather than waiting for the turn to publish the result. */
-export async function answer(item: TranscriptItem, chosen: Answer): Promise<void> {
-  if (item.kind !== "tool" || !item.askId) return;
+/** A choice closes its card on click. A quoted answer keeps the free-text
+    field mounted until delivery so a failed send can be retried. */
+export async function answer(item: TranscriptItem, chosen: Answer, keepOpen = false): Promise<boolean> {
+  if (item.kind !== "tool" || !item.askId) return false;
   const id = item.askId;
-  item.askId = undefined;
-  if ((await guard(() => api.answer(id, chosen))) === null) item.askId = id;
+  if (!keepOpen) item.askId = undefined;
+  const sent = (await guard(() => api.answer(id, chosen))) !== null;
+  if (sent && item.askId === id) item.askId = undefined;
+  if (!sent && !keepOpen && item.askId === undefined) item.askId = id;
+  return sent;
 }
 
 export async function removeAllowed(prefix: string): Promise<void> {

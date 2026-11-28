@@ -290,6 +290,8 @@ func renderAnswer(q Question, ans Answer) string {
 	}
 	text := strings.TrimSpace(ans.Text)
 	switch {
+	case len(labels) > 0 && strings.Contains(text, "\n"):
+		return strings.Join(labels, ", ") + ":\n\n" + text
 	case len(labels) > 0 && text != "":
 		return strings.Join(labels, ", ") + ": " + text
 	case len(labels) > 0:
@@ -300,21 +302,24 @@ func renderAnswer(q Question, ans Answer) string {
 	return "no answer"
 }
 
-// renderAnswers is a call's answer as the model is handed it. One question is
-// the answer alone, as it always was; several are one line each, in the order
-// they were asked.
+// A single question returns its answer alone. Numbered answers occupy one
+// line each unless a multiline answer needs its own Markdown block.
 func renderAnswers(qs []Question, ans []Answer) string {
 	if len(qs) == 1 {
 		return renderAnswer(qs[0], ans[0])
 	}
-	var b strings.Builder
+	blocks := make([]string, len(qs))
+	separator := "\n"
 	for i, q := range qs {
-		if i > 0 {
-			b.WriteString("\n")
+		text := renderAnswer(q, ans[i])
+		gap := " "
+		if strings.Contains(text, "\n") {
+			gap = "\n\n"
+			separator = "\n\n"
 		}
-		fmt.Fprintf(&b, "%d. %s %s", i+1, q.Text, renderAnswer(q, ans[i]))
+		blocks[i] = fmt.Sprintf("%d. %s%s%s", i+1, q.Text, gap, text)
 	}
-	return b.String()
+	return strings.Join(blocks, separator)
 }
 
 var idEncoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)

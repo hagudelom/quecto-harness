@@ -41,7 +41,10 @@ export function asked(args: Record<string, unknown>): Asked[] {
 export function answerText(options: Option[], chosen: number[], typed: string): string {
   const labels = chosen.map((i) => options[i]?.label ?? "").filter((l) => l !== "");
   const text = typed.trim();
-  if (labels.length > 0 && text !== "") return `${labels.join(", ")}: ${text}`;
+  if (labels.length > 0 && text !== "") {
+    const gap = text.includes("\n") ? "\n\n" : " ";
+    return `${labels.join(", ")}:${gap}${text}`;
+  }
   if (labels.length > 0) return labels.join(", ");
   return text || "no answer";
 }

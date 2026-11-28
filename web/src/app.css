@@ -628,6 +628,8 @@
   /* Room for two lines before anything is typed. */
   .field-main {
     min-height: 52px;
+  }
+  .composer :is(.field-main, .quote-reply) {
     font-size: 15px;
   }
   .composer-main .round {
@@ -2354,12 +2356,33 @@
   /* A passage quoted from a reply, in the composer and in the sent bubble.
      Three lines show; the rest is still sent. */
   .quotes {
+    max-height: 38dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 12px;
   }
-  .bubble .quotes:not(:last-child) {
-    margin-bottom: 8px;
+  .bubble .quote + .quote {
+    margin-top: 6px;
+  }
+  .bubble .quote + .bubble-text,
+  .bubble .bubble-text + .quote {
+    margin-top: 8px;
+  }
+  .bubble .bubble-text + .bubble-text {
+    margin-top: 1lh;
+  }
+  .quotes > div {
+    display: flex;
+    flex-direction: column;
+  }
+  .quote-reply {
+    box-sizing: content-box;
+    width: auto;
+    max-height: 6lh;
+    field-sizing: content;
+    margin-top: 4px;
   }
   .quote {
     display: flex;

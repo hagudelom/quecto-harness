@@ -238,6 +238,37 @@ func TestAskQuestionMultiRunsInOrder(t *testing.T) {
 	}
 }
 
+func TestAskQuestionMultilineAnswers(t *testing.T) {
+	h := newHarness(t, "stream_ask_many.txt", "stream_plain.txt", "stream_plain.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, "choose the cache and its checks", nil)
+
+	first := waitForQuestion(t, h, s.ID)
+	if err := h.engine.Answer(first.ID, Answer{Text: "> Cache size\n\nKeep it small."}); err != nil {
+		t.Fatal(err)
+	}
+	second := waitForQuestion(t, h, s.ID)
+	if err := h.engine.Answer(second.ID, Answer{Options: []int{0, 2}, Text: "> Test scope\n\nCheck both."}); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+
+	doc, _, _, _ := s.Snapshot()
+	want := "1. Where should the cache live?\n\n> Cache size\n\nKeep it small." +
+		"\n\n2. Which checks before the commit?\n\ngofmt, go test -race:\n\n> Test scope\n\nCheck both."
+	if got := toolResult(t, doc, "ask_user_question").Content; got != want {
+		t.Errorf("tool result = %q, want %q", got, want)
+	}
+}
+
+func TestRenderAnswerSingleLineWithOption(t *testing.T) {
+	q := Question{Options: []Option{{Label: "On disk"}}}
+	ans := Answer{Options: []int{0}, Text: "  Limit it to 1 GB.\n"}
+	if got := renderAnswer(q, ans); got != "On disk: Limit it to 1 GB." {
+		t.Errorf("single-line answer = %q", got)
+	}
+}
+
 // TestAskQuestionRefusesOutOfOrder asserts that a sub-question is one-shot:
 // once answered it is closed, so a second answer to it is refused rather than
 // recorded twice, and the call carries on to the next question.

@@ -1,20 +1,20 @@
-// Passages picked from a reply, waiting in the composer for the next message.
-// The popover over the transcript adds them and the composer sends them.
+import type { QuoteDraft } from "../quote";
 
-export const quoted = $state<{ items: string[]; added: number }>({ items: [], added: 0 });
+// Selected passages stay in the composer until the message is sent.
+export const quoted = $state<{ items: QuoteDraft[]; added: number }>({ items: [], added: 0 });
 
 export function addQuote(text: string): void {
   const clean = text.trim();
   if (!clean) return;
-  quoted.items = [...quoted.items, clean];
+  quoted.items.push({ text: clean, reply: "" });
   quoted.added++;
 }
 
 export function removeQuote(index: number): void {
-  quoted.items = quoted.items.filter((_, i) => i !== index);
+  quoted.items.splice(index, 1);
 }
 
-export function takeQuotes(): string[] {
+export function takeQuotes(): QuoteDraft[] {
   const items = quoted.items;
   quoted.items = [];
   return items;
